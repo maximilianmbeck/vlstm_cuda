@@ -31,3 +31,9 @@ def copykernel(mat_A: torch.Tensor) -> torch.Tensor:
     out = cppmodule.copykernel(mat_A)
 
     return out
+
+
+def mmkernelv1(mat_A: torch.Tensor, mat_B: torch.Tensor) -> torch.Tensor:
+    out = cppmodule.mmkernelv1(mat_A, mat_B)
+
+    return out
