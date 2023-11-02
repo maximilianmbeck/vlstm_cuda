@@ -1,0 +1,62 @@
+{
+    "editor.rulers": [
+        120
+    ],
+    "python.formatting.provider": "black",
+    "python.formatting.blackArgs": [
+        "--line-length=120"
+    ],
+    "isort.args": [
+        "--profile",
+        "black"
+    ],
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnType": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": true //true
+        }
+    },
+    "editor.formatOnSave": true, //true,
+    "files.watcherExclude": {
+        "outputs/**": true,
+        "**/*.feather": true,
+        "data/**": true,
+        "**/.git/objects/**": true,
+        "**/.git/subtree-cache/**": true,
+    },
+    "python.linting.enabled": false,
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "C_Cpp.default.cppStandard": "c++17",
+    "C_Cpp.clang_format_fallbackStyle": "LLVM",
+    //     "files.associations": {
+    //         "__atomic": "cpp",
+    //         "filesystem": "cpp",
+    //         "array": "cpp",
+    //         "bitset": "cpp",
+    //         "string_view": "cpp",
+    //         "hash_map": "cpp",
+    //         "hash_set": "cpp",
+    //         "slist": "cpp",
+    //         "initializer_list": "cpp",
+    //         "ranges": "cpp",
+    //         "utility": "cpp",
+    //         "valarray": "cpp",
+    //         "__hash_table": "cpp",
+    //         "__split_buffer": "cpp",
+    //         "__tree": "cpp",
+    //         "deque": "cpp",
+    //         "iterator": "cpp",
+    //         "list": "cpp",
+    //         "map": "cpp",
+    //         "queue": "cpp",
+    //         "random": "cpp",
+    //         "set": "cpp",
+    //         "stack": "cpp",
+    //         "string": "cpp",
+    //         "unordered_map": "cpp",
+    //         "unordered_set": "cpp",
+    //         "vector": "cpp",
+    //         "type_traits": "cpp"
+    //     },
+}

@@ -1,0 +1,28 @@
+{
+    "configurations": [
+        {
+            "name": "Linux_cudadev",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "/scratch/maximilian.beck/.conda/envs/xlstm/include",
+                "/local00/bioinf/beck/envs/xlstmdev1/include"
+            ],
+            "defines": [],
+            "cStandard": "gnu17",
+            "cppStandard": "gnu++14",
+            "compilerPath": "/local00/bioinf/beck/envs/xlstmdev1/bin/nvcc",
+            "intelliSenseMode": "linux-gcc-x64",
+            "configurationProvider": "ms-vscode.makefile-tools",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "/scratch/maximilian.beck/.conda/envs/xlstm/include",
+                    "/local00/bioinf/beck/envs/xlstmdev1/include"
+                ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            }
+        }
+    ],
+    "version": 4
+}
