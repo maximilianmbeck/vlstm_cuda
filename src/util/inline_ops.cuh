@@ -1,5 +1,5 @@
 // Copyright 2023 IARAI GmbH, All Rights Reserved
-// Author: Korbinian Pöppel
+// Author: Korbinian Pöppel, adapted by Maximilian Beck
 // Adapted from the haste library
 //
 // See:
@@ -225,27 +225,29 @@ __device__ __forceinline__ bool high_half_gt_zero_2h(const T x);
 template <typename T, typename HT>
 __device__ __forceinline__ T join_halves_2h(const HT x, const HT y);
 
-// #if CUDART_VERSION >= 11000 && __CUDA_ARCH__ >= 600
+#pragma message(AT " CUDART_VERSION: " TOSTRING(CUDART_VERSION) ", arch: "     \
+                    TOSTRING(__CUDA_ARCH__))
+
+#if CUDART_VERSION >= 11000 && __CUDA_ARCH__ >= 750 //600
+
+#pragma message("INCLUDING FP16")
 
 #include "inline_ops_fp16.cuh"
 
 #include "inline_ops_2fp16.cuh"
 
-#include <cuda_fp16.h>
-#pragma message(AT " CUDART_VERSION with FP16: " TOSTRING(CUDART_VERSION))
-// #else
-// #pragma message(AT " CUDART_VERSION: " TOSTRING(CUDART_VERSION))
-// #endif
+#else
+#pragma message("SKIPPING FP16, because of CUDART_VERSION: " TOSTRING(CUDART_VERSION) ", arch: " TOSTRING(__CUDA_ARCH__))
+#endif
 
-// #if CUDART_VERSION >= 11020 && __CUDA_ARCH__ >= 800
+#if CUDART_VERSION >= 11020 && __CUDA_ARCH__ >= 800
+
+#pragma message("INCLUDING BF16")
 
 #include "inline_ops_bf16.cuh"
 
 #include "inline_ops_2bf16.cuh"
 
-#include <cuda_bf16.h>
-#pragma message(AT " CUDART_VERSION with BF16: " TOSTRING(                     \
-        CUDART_VERSION) ", arch: " TOSTRING(__CUDA_ARCH__))
-// #else
-//  #pragma message(AT " CUDART_VERSION: " TOSTRING(CUDART_VERSION) ", arch: "
-//  TOSTRING(__CUDA_ARCH__)) #endif
+#else
+#pragma message("SKIPPING BF16, because of CUDART_VERSION: " TOSTRING(CUDART_VERSION) ", arch: " TOSTRING(__CUDA_ARCH__))
+#endif
