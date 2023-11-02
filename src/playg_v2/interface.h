@@ -8,9 +8,9 @@ using torch::Tensor;
 
 namespace interface {
 
-Tensor testkernel(Tensor mat_A);
+Tensor testkernel(const Tensor& mat_A);
 
-Tensor copykernel(Tensor mat_A);
+Tensor copykernel(const Tensor& mat_A);
 
 Tensor mmkernelv1(Tensor mat_A, Tensor mat_B);
 

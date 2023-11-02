@@ -11,7 +11,8 @@ namespace vlstm {
 namespace kernels {
 
 /*A kernel that copies from A to B*/
-__global__ void copykernel(__nv_bfloat16 *mat_A, __nv_bfloat16 *mat_B, int r,
+template <typename scalar_t>
+__global__ void copykernel(scalar_t *mat_A, scalar_t *mat_B, int r,
                            int c);
 
 /*MatrixMul kernel does matrix multiplication from the NVIDA cuda_samples
@@ -22,19 +23,22 @@ template<int> __global__ void mmkernelv1(__nv_bfloat16 *matC, __nv_bfloat16 *mat
 } // namespace kernels
 
 /* COPYKERNEL */
-__global__ void kernels::copykernel(__nv_bfloat16 *mat_A, __nv_bfloat16 *mat_B,
+template <typename scalar_t>
+__global__ void kernels::copykernel<scalar_t>(scalar_t *mat_A, scalar_t *mat_B,
                                     int rdim, int cdim) {
   int cidx = blockIdx.x * blockDim.x + threadIdx.x;
   int ridx = blockIdx.y * blockDim.y + threadIdx.y;
-  // printf("cidx: %d, ridx: %d\n", cidx, ridx);
 
   if (cidx < cdim && ridx < rdim) {
     int idx = ridx + cidx * rdim;
+    float val = to_float<scalar_t>(mat_A[idx]);
+    printf("cidx: %d, ridx: %d, val: %f\n", cidx, ridx, val);
     mat_B[idx] = mat_A[idx];
   }
 }
 
-void kernels::copykernel_dispatch(__nv_bfloat16 *mat_A, __nv_bfloat16 *mat_B,
+template <typename scalar_t>
+void kernels::copykernel_dispatch<scalar_t>(scalar_t *mat_A, scalar_t *mat_B,
                                   int rows, int cols) {
   printf("rows: %d, cols: %d\n", rows, cols);
   // determine the number of blocks and threads
@@ -43,8 +47,11 @@ void kernels::copykernel_dispatch(__nv_bfloat16 *mat_A, __nv_bfloat16 *mat_B,
                          (cols + block_threads.x - 1) / block_threads.x);
   printf("blocksxy: %d-%d, threads: %d-%d\n", grid_blocks.x, grid_blocks.y,
          block_threads.x, block_threads.y);
-  kernels::copykernel<<<grid_blocks, block_threads>>>(mat_A, mat_B, rows, cols);
+  kernels::copykernel<scalar_t><<<grid_blocks, block_threads>>>(mat_A, mat_B, rows, cols);
 }
+
+template void kernels::copykernel_dispatch<__nv_bfloat16>(__nv_bfloat16 *mat_A, __nv_bfloat16 *mat_B, int rows, int cols);
+template void kernels::copykernel_dispatch<__half>(__half *mat_A, __half *mat_B, int rows, int cols);
 
 /* MATRIXMUL KERNEL */
 /**
@@ -127,24 +134,25 @@ A: (m x k)
 B: (k x n)
 C: (m x n)
 */
-void kernels::mmkernelv1_dispatch(__nv_bfloat16 *matC, __nv_bfloat16 *matA,
-                                  __nv_bfloat16 *matB, int m, int n, int k) {
-  const int BLOCK_SIZE = 32;
+// template <typename scalar_t>
+// void kernels::mmkernelv1_dispatch<scalar_t>(__nv_bfloat16 *matC, __nv_bfloat16 *matA,
+//                                   __nv_bfloat16 *matB, int m, int n, int k) {
+//   const int BLOCK_SIZE = 32;
 
-  printf("m: %d, n: %d, k: %d\n", m, n, k);
-  if (m % BLOCK_SIZE != 0 || n % BLOCK_SIZE != 0 || k % BLOCK_SIZE != 0) {
-      printf("m, n, k must be divisible by BLOCK_SIZE\n");
-      return;
-    }
+//   printf("m: %d, n: %d, k: %d\n", m, n, k);
+//   if (m % BLOCK_SIZE != 0 || n % BLOCK_SIZE != 0 || k % BLOCK_SIZE != 0) {
+//       printf("m, n, k must be divisible by BLOCK_SIZE\n");
+//       return;
+//     }
 
-  // determine the number of blocks and threads
-  const dim3 block_threads(BLOCK_SIZE, BLOCK_SIZE);
-  const dim3 grid_blocks((m + block_threads.y - 1) / block_threads.y,
-                         (n + block_threads.x - 1) / block_threads.x);
-  printf("blocksxy: %d-%d, threads: %d-%d\n", grid_blocks.x, grid_blocks.y,
-         block_threads.x, block_threads.y);
-  kernels::mmkernelv1<BLOCK_SIZE>
-      <<<grid_blocks, block_threads>>>(matC, matA, matB, k, n);
-}
+//   // determine the number of blocks and threads
+//   const dim3 block_threads(BLOCK_SIZE, BLOCK_SIZE);
+//   const dim3 grid_blocks((m + block_threads.y - 1) / block_threads.y,
+//                          (n + block_threads.x - 1) / block_threads.x);
+//   printf("blocksxy: %d-%d, threads: %d-%d\n", grid_blocks.x, grid_blocks.y,
+//          block_threads.x, block_threads.y);
+//   kernels::mmkernelv1<BLOCK_SIZE>
+//       <<<grid_blocks, block_threads>>>(matC, matA, matB, k, n);
+// }
 
 } // namespace vlstm

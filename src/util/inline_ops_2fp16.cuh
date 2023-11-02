@@ -68,6 +68,14 @@ template <> __device__ __forceinline__ __half2 dscalar(double x) {
 
 // -- CONSTANTS
 
+// CONVERSIONS
+
+// template <typename T> __device__ __forceinline__ float to_float(T x) {
+//   return __half2float(x);
+// }
+
+// -- CONVERSIONS
+
 // ARITHMETIC FUNCTIONS
 // ADD
 template <>

@@ -67,6 +67,14 @@ template <> __device__ __forceinline__ __nv_bfloat16 dscalar(double x) {
 
 // -- CONSTANTS
 
+// CONVERSIONS
+
+template <> __device__ __forceinline__ float to_float(__nv_bfloat16 x) {
+  return __bfloat162float(x);
+}
+
+// -- CONVERSIONS
+
 // ARITHMETIC FUNCTIONS
 // ADD
 template <>

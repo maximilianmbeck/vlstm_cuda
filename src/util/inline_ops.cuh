@@ -59,6 +59,14 @@ template <typename T> __device__ __forceinline__ T dscalar(double x) {
 
 // -- CONSTANTS
 
+// CONVERSIONS
+
+template <typename T> __device__ __forceinline__ float to_float(T x) {
+  return x;
+}
+
+// -- CONVERSIONS
+
 // ARITHMETIC FUNCTIONS
 // ADD
 template <typename T> __device__ __forceinline__ T add_g(const T a, const T b) {
