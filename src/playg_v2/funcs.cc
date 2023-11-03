@@ -21,8 +21,6 @@ Tensor interface::copykernel(const Tensor& mat_A) {
   auto mat_B = torch::zeros_like(mat_A);
   AT_DISPATCH_FLOATING_TYPES_AND_HALF2(
       mat_A.scalar_type(), "copykernel", ([&] {
-        //   bool isbfloat = std::is_same<scalar_t, at::BFloat16>::value;
-        //   printf("dtype is bfloat: %s", isbfloat);
         if (std::is_same<scalar_t, at::BFloat16>::value) {
           printf("before kernel dispatch - bfloat16!\n");
           kernels::copykernel_dispatch<__nv_bfloat16>(
@@ -44,29 +42,41 @@ Tensor interface::copykernel(const Tensor& mat_A) {
   return mat_B;
 }
 
-// Tensor interface::mmkernelv1(Tensor matA, Tensor matB) {
-//   const auto m = matA.size(0);
-//   const auto k = matA.size(1);
-//   const auto n = matB.size(1);
-//   auto matC = torch::zeros({m, n}, matA.options());
+Tensor interface::mmkernelv1(Tensor matA, Tensor matB) {
+  const auto m = matA.size(0);
+  const auto k = matA.size(1);
+  const auto n = matB.size(1);
+  auto matC = torch::zeros({m, n}, matA.options());
   
-//   AT_DISPATCH_FLOATING_TYPES_AND_HALF2(
-//           matA.scalar_type(), "mmkernelv1", ([&] {
-//             printf("before kernel dispatch!\n");
-//             kernels::mmkernelv1_dispatch(
-//                 reinterpret_cast<__nv_bfloat16 *>(matC.data_ptr<scalar_t>()), 
-//                 reinterpret_cast<__nv_bfloat16 *>(matA.data_ptr<scalar_t>()),
-//                 reinterpret_cast<__nv_bfloat16 *>(matB.data_ptr<scalar_t>()),
-//                 m,   k, n);
-//           }));
+  AT_DISPATCH_FLOATING_TYPES_AND_HALF2(
+          matA.scalar_type(), "mmkernelv1", ([&] {
+            if (std::is_same<scalar_t, at::BFloat16>::value) {
+              printf("before kernel dispatch - bfloat16!\n");
+              kernels::mmkernelv1_dispatch<__nv_bfloat16>(
+                reinterpret_cast<__nv_bfloat16 *>(matC.data_ptr<scalar_t>()), 
+                reinterpret_cast<__nv_bfloat16 *>(matA.data_ptr<scalar_t>()),
+                reinterpret_cast<__nv_bfloat16 *>(matB.data_ptr<scalar_t>()),
+                m, n, k);
+            } else if (std::is_same<scalar_t, at::Half>::value) {
+              printf("before kernel dispatch - float16!\n");
+              kernels::mmkernelv1_dispatch<__half>(
+                reinterpret_cast<__half *>(matC.data_ptr<scalar_t>()), 
+                reinterpret_cast<__half *>(matA.data_ptr<scalar_t>()),
+                reinterpret_cast<__half *>(matB.data_ptr<scalar_t>()),
+                m, n, k);
 
-//   return matC;
-// }
+            } else {
+              printf("No kernel for this dtype available.\n");
+            }
+          }));
+
+  return matC;
+}
 
 } // namespace vlstm
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("testkernel", &vlstm::interface::testkernel, "A test kernel.");
   m.def("copykernel", &vlstm::interface::copykernel, "A copy kernel.");
-  // m.def("mmkernelv1", &vlstm::interface::mmkernelv1, "A mm kernel.");
+  m.def("mmkernelv1", &vlstm::interface::mmkernelv1, "A mm kernel.");
 }

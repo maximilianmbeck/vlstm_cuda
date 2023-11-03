@@ -41,7 +41,7 @@ __global__ void kernels::copykernel<scalar_t>(scalar_t *mat_A, scalar_t *mat_B,
 template __global__ void kernels::copykernel<__nv_bfloat16>(__nv_bfloat16 *mat_A, __nv_bfloat16 *mat_B, int rdim, int cdim);
 template __global__ void kernels::copykernel<__half>(__half *mat_A, __half *mat_B, int rdim, int cdim);
 
-template <typename scalar_t>
+template <typename scalar_t> // todo remove this scalar_t after func name
 void kernels::copykernel_dispatch<scalar_t>(scalar_t *mat_A, scalar_t *mat_B,
                                   int rows, int cols) {
   printf("rows: %d, cols: %d\n", rows, cols);
@@ -64,9 +64,9 @@ template void kernels::copykernel_dispatch<__half>(__half *mat_A, __half *mat_B,
  * Matrix multiplication (CUDA Kernel) on the device: C = A * B
  * wA is A's width and wB is B's width
  */
-template <int BLOCK_SIZE>
-__global__ void kernels::mmkernelv1(__nv_bfloat16 *C, __nv_bfloat16 *A,
-                                    __nv_bfloat16 *B, int wA, int wB) {
+template <typename scalar_t, int BLOCK_SIZE>
+__global__ void kernels::mmkernelv1(scalar_t *C, scalar_t *A,
+                                    scalar_t *B, int wA, int wB) {
   // Block index
   int bx = blockIdx.x;
   int by = blockIdx.y;
@@ -92,18 +92,18 @@ __global__ void kernels::mmkernelv1(__nv_bfloat16 *C, __nv_bfloat16 *A,
 
   // Csub is used to store the element of the block sub-matrix
   // that is computed by the thread
-  __nv_bfloat16 Csub = dscalar_zero<__nv_bfloat16>();
+  scalar_t Csub = dscalar_zero<scalar_t>();
 
   // Loop over all the sub-matrices of A and B
   // required to compute the block sub-matrix
   for (int a = aBegin, b = bBegin; a <= aEnd; a += aStep, b += bStep) {
     // Declaration of the shared memory array As used to
     // store the sub-matrix of A
-    __shared__ __nv_bfloat16 As[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ scalar_t As[BLOCK_SIZE][BLOCK_SIZE];
 
     // Declaration of the shared memory array Bs used to
     // store the sub-matrix of B
-    __shared__ __nv_bfloat16 Bs[BLOCK_SIZE][BLOCK_SIZE];
+    __shared__ scalar_t Bs[BLOCK_SIZE][BLOCK_SIZE];
 
     // Load the matrices from device memory
     // to shared memory; each thread loads
@@ -140,25 +140,32 @@ A: (m x k)
 B: (k x n)
 C: (m x n)
 */
-// template <typename scalar_t>
-// void kernels::mmkernelv1_dispatch<scalar_t>(__nv_bfloat16 *matC, __nv_bfloat16 *matA,
-//                                   __nv_bfloat16 *matB, int m, int n, int k) {
-//   const int BLOCK_SIZE = 32;
+template <typename scalar_t>
+void kernels::mmkernelv1_dispatch(scalar_t *matC, scalar_t *matA,
+                                  scalar_t *matB, int m, int n, int k) {
+  const int BLOCK_SIZE = 32;
 
-//   printf("m: %d, n: %d, k: %d\n", m, n, k);
-//   if (m % BLOCK_SIZE != 0 || n % BLOCK_SIZE != 0 || k % BLOCK_SIZE != 0) {
-//       printf("m, n, k must be divisible by BLOCK_SIZE\n");
-//       return;
-//     }
+  printf("m: %d, n: %d, k: %d\n", m, n, k);
+  if (m % BLOCK_SIZE != 0 || n % BLOCK_SIZE != 0 || k % BLOCK_SIZE != 0) {
+      printf("m, n, k must be divisible by BLOCK_SIZE\n");
+      return;
+    }
 
-//   // determine the number of blocks and threads
-//   const dim3 block_threads(BLOCK_SIZE, BLOCK_SIZE);
-//   const dim3 grid_blocks((m + block_threads.y - 1) / block_threads.y,
-//                          (n + block_threads.x - 1) / block_threads.x);
-//   printf("blocksxy: %d-%d, threads: %d-%d\n", grid_blocks.x, grid_blocks.y,
-//          block_threads.x, block_threads.y);
-//   kernels::mmkernelv1<BLOCK_SIZE>
-//       <<<grid_blocks, block_threads>>>(matC, matA, matB, k, n);
-// }
+  // determine the number of blocks and threads
+  const dim3 block_threads(BLOCK_SIZE, BLOCK_SIZE);
+  const dim3 grid_blocks((m + block_threads.y - 1) / block_threads.y,
+                         (n + block_threads.x - 1) / block_threads.x);
+  printf("blocksxy: %d-%d, threads: %d-%d\n", grid_blocks.x, grid_blocks.y,
+         block_threads.x, block_threads.y);
+  kernels::mmkernelv1<scalar_t, BLOCK_SIZE>
+      <<<grid_blocks, block_threads>>>(matC, matA, matB, k, n);
+
+  gpuErrchk( cudaPeekAtLastError() );
+  gpuErrchk( cudaDeviceSynchronize() );
+
+}
+
+template void kernels::mmkernelv1_dispatch<__nv_bfloat16>(__nv_bfloat16 *matC, __nv_bfloat16 *matA, __nv_bfloat16 *matB, int m, int n, int k);
+template void kernels::mmkernelv1_dispatch<__half>(__half *matC, __half *matA, __half *matB, int m, int n, int k);
 
 } // namespace vlstm
