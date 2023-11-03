@@ -4,6 +4,7 @@
 
 #include "../util/support.h"
 #include "../util/inline_ops.cuh"
+#include "../util/cuda_errorcheck.h"
 #include "kernel_dispatchers.h"
 
 namespace vlstm {
@@ -37,6 +38,9 @@ __global__ void kernels::copykernel<scalar_t>(scalar_t *mat_A, scalar_t *mat_B,
   }
 }
 
+template __global__ void kernels::copykernel<__nv_bfloat16>(__nv_bfloat16 *mat_A, __nv_bfloat16 *mat_B, int rdim, int cdim);
+template __global__ void kernels::copykernel<__half>(__half *mat_A, __half *mat_B, int rdim, int cdim);
+
 template <typename scalar_t>
 void kernels::copykernel_dispatch<scalar_t>(scalar_t *mat_A, scalar_t *mat_B,
                                   int rows, int cols) {
@@ -48,6 +52,8 @@ void kernels::copykernel_dispatch<scalar_t>(scalar_t *mat_A, scalar_t *mat_B,
   printf("blocksxy: %d-%d, threads: %d-%d\n", grid_blocks.x, grid_blocks.y,
          block_threads.x, block_threads.y);
   kernels::copykernel<scalar_t><<<grid_blocks, block_threads>>>(mat_A, mat_B, rows, cols);
+  gpuErrchk( cudaPeekAtLastError() );
+  gpuErrchk( cudaDeviceSynchronize() );
 }
 
 template void kernels::copykernel_dispatch<__nv_bfloat16>(__nv_bfloat16 *mat_A, __nv_bfloat16 *mat_B, int rows, int cols);

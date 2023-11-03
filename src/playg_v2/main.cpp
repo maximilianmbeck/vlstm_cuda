@@ -4,7 +4,7 @@
 
 #include "interface.h"
 
-#define CUDA_DEVICE 5
+#define CUDA_DEVICE 0
 
 int main() {
   printf("Creating tensor:\n");
