@@ -131,6 +131,13 @@ __global__ void kernels::mmkernelv1(scalar_t *C, scalar_t *A, scalar_t *B,
       // Load the matrices from device memory
       // to shared memory; each thread loads
       // one element of each matrix
+
+      // @max: There are three bounds to consider:
+      // TODO rewrite kernel with true indices not with memory offsets
+      // - m & n in the B matrix: the tread block bounds
+      // - k in the A and B matrix: the bounds of the loop over the k dimension
+      // TODO @max: WRONG! the bounds of the loop over the k dimension are not
+      // correct! rewrite!
       As[ty][tx] = A[a + k * ty + tx]; // (threadlevel)
       Bs[ty][tx] = B[b + n * ty + tx]; // (threadlevel)
       // Synchronize to make sure the matrices are loaded
