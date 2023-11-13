@@ -182,7 +182,7 @@ void kernel_dispatchers::mmkernelv1_dispatch(scalar_t *matC, scalar_t *matA,
                                              scalar_t *matB, int m, int n,
                                              int k) {
   printf("m: %d, n: %d, k: %d\n", m, n, k);
-  const int BLOCK_SIZE = 4;
+  const int BLOCK_SIZE = 8;
 
   // determine the number of blocks and threads
   const dim3 blockDims(BLOCK_SIZE, BLOCK_SIZE);
@@ -214,6 +214,7 @@ template void kernel_dispatchers::mmkernelv1_dispatch<__half>(
  * Matrix multiplication (CUDA Kernel) on the device: C = A * B
  * k is A's width and n is B's width
  * should work for arbitrary m, n, k
+ * Note @max: Rewrite of kernel v1 to use true indices instead of memory
  */
 template <typename scalar_t, int BLOCK_SIZE>
 __global__ void kernels::mmkernelv2(scalar_t *C, scalar_t *A, scalar_t *B,
@@ -227,7 +228,7 @@ __global__ void kernels::mmkernelv2(scalar_t *C, scalar_t *A, scalar_t *B,
   int ty = threadIdx.y;
   int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
 
-  if (bx * blockDim.x + tx < n && by * blockDim.y + ty < m) {
+  if (true) { //(bx * blockDim.x + tx < n && by * blockDim.y + ty < m) {
 
     // if (true) {
     //   printf("bdx: %d, bdy: %d, b_cx: %d, b_cy: %d, tIdx: %d\n", blockDim.x,
