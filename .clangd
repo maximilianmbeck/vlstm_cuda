@@ -1,7 +1,7 @@
 CompileFlags:
   Add:
     - -std=c++17
-    - --cuda-path=/scratch/maximilian.beck/.conda/envs/xlstmdev1
+    - --cuda-path=/home/max/miniconda3/envs/xlstmpt21cu118
     - --cuda-gpu-arch=sm_80
-    - -L/scratch/maximilian.beck/.conda/envs/xlstmdev1/lib
-    - -I/scratch/maximilian.beck/.conda/envs/xlstmdev1/include
+    - -L/home/max/miniconda3/envs/xlstmpt21cu118/lib
+    - -I/home/max/miniconda3/envs/xlstmpt21cu118/include

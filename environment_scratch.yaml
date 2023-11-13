@@ -1,0 +1,12 @@
+name: xlstm
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - pip=23.0.1
+  - python=3.10.10
+  - nvitop
+  - git
+  - pip:
