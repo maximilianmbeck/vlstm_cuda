@@ -7,7 +7,6 @@
 #define CUDA_DEVICE 0
 
 int main() {
-  torch::Tensor tensor;
   printf("Creating tensor:\n");
   auto options = torch::TensorOptions()
                      .dtype(torch::kFloat16)
@@ -20,9 +19,9 @@ int main() {
   torch::Tensor tensor2 = vlstm::interface::copykernel(tensor);
   std::cout << tensor2 << std::endl;
 
-  printf("Calling testkernel:\n");
-  torch::Tensor tensor3 = vlstm::interface::testkernel(tensor);
-  std::cout << tensor3 << std::endl;
+  // printf("Calling testkernel:\n");
+  // torch::Tensor tensor3 = vlstm::interface::testkernel(tensor);
+  // std::cout << tensor3 << std::endl;
 
   return 0;
 }

@@ -1,0 +1,18 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "vlstm_v1_build",
+            "type": "shell",
+            "command": "make dbg=1",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$nvcc"],
+            "options": {
+                "cwd": "${workspaceFolder}/src/vlstm_v1/build"
+            }
+        }
+    ]
+}

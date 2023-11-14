@@ -5,23 +5,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "CUDA C++: playg_v2",
+            "name": "CUDA GDB Launch",
             "type": "cuda-gdb",
             "request": "launch",
-            "program": "${workspaceFolder}/src/playg_v2/build/playg_v2",
-            "environment": [
-                {
-                    "CUDA_VISIBLE_DEVICES": "5"
-                },
-                {
-                    "CUDBG_USE_LEGACY_DEBUGGER": "1"
-                }
-            ]
+            "program": "${workspaceFolder}/src/vlstm_v1/build/vlstm_v1",
+            "breakOnLaunch": true,
+            "initCommands": []
         },
-        {
-            "name": "CUDA C++: Attach",
-            "type": "cuda-gdb",
-            "request": "attach"
-        }
     ]
 }
