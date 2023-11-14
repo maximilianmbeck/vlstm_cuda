@@ -14,7 +14,7 @@ class CppModule(object):
     @classmethod
     def instance(cls):
         if cls.module is None:
-            cls.module = load(name="vlstm_v1", sources=[str(filedir / "interface.cc"), str(filedir / "kernels.cu")])
+            cls.module = load(name="vlstm_v2", sources=[str(filedir / "interface.cc"), str(filedir / "kernels.cu")])
         return cls.module
 
 
@@ -35,11 +35,5 @@ def copykernel(mat_A: torch.Tensor) -> torch.Tensor:
 
 def mmkernelv1(mat_A: torch.Tensor, mat_B: torch.Tensor) -> torch.Tensor:
     out = cppmodule.mmkernelv1(mat_A, mat_B)
-
-    return out
-
-
-def mmkernelv2(mat_A: torch.Tensor, mat_B: torch.Tensor) -> torch.Tensor:
-    out = cppmodule.mmkernelv2(mat_A, mat_B)
 
     return out

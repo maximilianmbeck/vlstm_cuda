@@ -14,8 +14,6 @@ Tensor copykernel(const Tensor &mat_A);
 
 Tensor mmkernelv1(Tensor mat_A, Tensor mat_B);
 
-Tensor mmkernelv2(Tensor mat_A, Tensor mat_B);
-
 } // namespace interface
 
 } // namespace vlstm
