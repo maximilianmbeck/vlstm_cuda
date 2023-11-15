@@ -2,6 +2,6 @@ CompileFlags:
   Add:
     - -std=c++17
     - --cuda-path=/home/max/miniconda3/envs/xlstmpt21cu118
-    - --cuda-gpu-arch=sm_80
+    - --cuda-gpu-arch=sm_89
     - -L/home/max/miniconda3/envs/xlstmpt21cu118/lib
     - -I/home/max/miniconda3/envs/xlstmpt21cu118/include

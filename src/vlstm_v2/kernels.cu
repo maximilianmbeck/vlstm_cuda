@@ -6,6 +6,7 @@
 
 #include "../util/cuda_errorcheck.h"
 #include "../util/inline_ops.cuh"
+#include "../util/inline_print.cuh"
 #include "../util/support.h"
 #include "kernel_dispatchers.h"
 
@@ -163,9 +164,19 @@ __global__ void kernels::mmkernelv1(scalar_t *C, scalar_t *A, scalar_t *B,
 #pragma unroll
     // @max: inner looop
     for (int i = 0; i < BLOCK_SIZE; ++i) {
+      if ((cx == 0) && (cy == 9)) {
+        print_val("(ty,i) - As", ty, i, As[ty][i]);
+        print_val("(ty,i) - Bs", ty, i, Bs[ty][i]);
+      }
       Csub = add_g(Csub, mul_g(As[ty][i],
                                Bs[i][tx])); // (threadlevel): each thread
                                             // operates on BLOCK_SIZE elements
+      if ((cx == 0) && (cy == 9)) {
+        print_val("(cx,cy)-InLoop:Csub", cx, cy, Csub);
+      }
+    }
+    if ((cx == 0) && (cy == 9)) {
+      print_val("(cx,cy)-AfterLoop:Csub", cx, cy, Csub);
     }
     // Synchronize to make sure that the preceding
     // computation is done before loading two new
@@ -187,7 +198,7 @@ void kernel_dispatchers::mmkernelv1_dispatch(scalar_t *matC, scalar_t *matA,
                                              scalar_t *matB, int m, int n,
                                              int k) {
   printf("m: %d, n: %d, k: %d\n", m, n, k);
-  const int BLOCK_SIZE = 8;
+  const int BLOCK_SIZE = 4;
 
   // determine the number of blocks and threads
   const dim3 blockDims(BLOCK_SIZE, BLOCK_SIZE);
