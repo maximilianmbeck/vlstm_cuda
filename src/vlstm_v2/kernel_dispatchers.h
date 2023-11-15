@@ -12,10 +12,6 @@ template <typename scalar_t>
 void mmkernelv1_dispatch(scalar_t *matC, scalar_t *matA, scalar_t *matB, int m,
                          int n, int k);
 
-template <typename scalar_t>
-void mmkernelv2_dispatch(scalar_t *matC, scalar_t *matA, scalar_t *matB, int m,
-                         int n, int k);
-
 } // namespace kernel_dispatchers
 
 } // namespace vlstm

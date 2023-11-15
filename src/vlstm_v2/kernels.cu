@@ -58,8 +58,8 @@ void kernel_dispatchers::copykernel_dispatch(scalar_t *mat_A, scalar_t *mat_B,
   printf("rows: %d, cols: %d\n", rows, cols);
   // determine the number of blocks and threads
   const dim3 block_threads(32, 32);
-  const dim3 grid_blocks((rows + block_threads.y - 1) / block_threads.y,
-                         (cols + block_threads.x - 1) / block_threads.x);
+  const dim3 grid_blocks((cols + block_threads.x - 1) / block_threads.x,
+                         (rows + block_threads.y - 1) / block_threads.y);
   printf("blocksxy: %d-%d, threads: %d-%d\n", grid_blocks.x, grid_blocks.y,
          block_threads.x, block_threads.y);
   kernels::copykernel<scalar_t>
@@ -114,7 +114,7 @@ __global__ void kernels::mmkernelv1(scalar_t *C, scalar_t *A, scalar_t *B,
   int aBegin = k * BLOCK_SIZE * by; // (blocklevel)
 
   // Index of the last sub-matrix of A processed by the block
-  int aEnd = aBegin + k; // (blocklevel)
+  int aEnd = aBegin + k - 1; // (blocklevel)
 
   // Step size used to iterate through the sub-matrices of A
   int aStep = BLOCK_SIZE; // (blocklevel)
@@ -135,7 +135,7 @@ __global__ void kernels::mmkernelv1(scalar_t *C, scalar_t *A, scalar_t *B,
   // required to compute the block sub-matrix
   // @max: outer loop, progresses always in BLOCK_SIZE steps and accumulates
   // the final values in Csub
-  for (int a = aBegin, b = bBegin; a < aEnd; a += aStep, b += bStep) {
+  for (int a = aBegin, b = bBegin; a <= aEnd; a += aStep, b += bStep) {
     // Declaration of the shared memory array As used to
     // store the sub-matrix of A
     __shared__ scalar_t As[BLOCK_SIZE][BLOCK_SIZE];
