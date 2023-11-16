@@ -1,5 +1,6 @@
 #include <cassert>
 
+#include <cstdio>
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
@@ -187,6 +188,10 @@ template void kernel_dispatchers::mmkernelv1_dispatch<__half>(
 #define QTILE_DIM 8  // QtileDim: TileDim for Q along seqLen dim
 #define KVTILE_DIM 8 // KVtileDim: TileDim for K&V along seqLen dim
 
+// TODO use dynamic shared memory!
+#define HD_SIZE                                                                \
+  64 // HD_SIZE: size of the allocated shared memory for the hidden dim
+
 #define DEBUG 1
 #define DEBUG2 1
 
@@ -211,6 +216,7 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
   // along gridDim.z)
   const uint batchHeadStep = seqLen * dimHeads;
   const uint batchHeadEnd = batchSize * numHeads * batchHeadStep;
+  //! Note: batchHeadIdx indices into global memory
   for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd;
        batchHeadIdx += batchHeadStep) {
 
@@ -233,21 +239,48 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
     __syncthreads();
 #endif
 
-    // Ends for looplevel 1/2:
+    // Ends for looplevel 1&2:
     uint qTileEnd = seqLen / QtileDim;
     uint kvTileEnd = seqLen / KVtileDim;
     // looplevel 1: loop over Qtile blocks along seqLen dim
+    // Note: qTileIdx does not index into global memory
     for (uint qTileIdx = 0; qTileIdx < qTileEnd; qTileIdx++) {
 
-      // TODO load qTile
+      // init qTile in shared memory
+      // TODO use dynamic shared memory!
+      __shared__ scalar_t qTile[QtileDim][HD_SIZE];
+
+      // compute indices
+      // left upper corner of qTileBlock in Q
+      const uint qTileBlockIdx = batchHeadIdx +
+                                 qTileIdx * dimHeads * TblockDim * blockIdx.y +
+                                 TblockDim * blockIdx.x;
+      // TODO: thread index
+
+      // load qTile into shared memory
+
+      // initialize result cTile in shared memory
+
       __syncthreads();
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
       for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; kvTileIdx++) {
-        // TODO load kvTiles
+
+        // load kTile into shared memory
+        // load vTile into shared memory
+
+        // initialize sTile in shared memory for intermediate result of QK^T
+
+        // compute S = QK^T, i.e. fill sTile
+
+        // compute C += S * V, i.e. fill cTile
+
         __syncthreads();
       }
+
+      // write cTile to global memory
     }
+
     // const uint cx = bx * blockDim.x + tx;
     // const uint cy = by * blockDim.y + ty;
 
@@ -334,11 +367,15 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
     printf("seqLen must be divisible by QblockDim and KVblockDim\n");
   }
 
+  if (dimHeads >= HD_SIZE) {
+    fprintf(stderr, "dimHeads must be smaller than HD_SIZE\n");
+  }
+
   // determine the number of blocks and threads
   const dim3 blockDims(TblockDim, TblockDim);
 
-  const dim3 gridDims(CEIL_DIV(dimHeads, blockDims.x),
-                      CEIL_DIV(seqLen, blockDims.y));
+  const dim3 gridDims(CEIL_DIV(KVblockDim, blockDims.x),
+                      CEIL_DIV(QblockDim, blockDims.y));
   printf("blocksxy: %d-%d, threads: %d-%d\n", gridDims.x, gridDims.y,
          blockDims.x, blockDims.y);
 

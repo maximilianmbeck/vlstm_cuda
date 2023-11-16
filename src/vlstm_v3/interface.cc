@@ -48,10 +48,21 @@ Tensor interface::qkvkernel(Tensor matQ, Tensor matK, Tensor matV) {
   const auto dimHeads = matQ.size(3);
 
   // checks: matK & matV should have the same shape
-  assert(matK.size(0) == batchSize && matV.size(0) == batchSize);
-  assert(matK.size(1) == numHeads && matV.size(1) == numHeads);
-  assert(matK.size(2) == seqLen && matV.size(2) == seqLen);
-  assert(matK.size(3) == dimHeads && matV.size(3) == dimHeads);
+  if (!(matK.size(0) == batchSize && matV.size(0) == batchSize)) {
+    printf("matK & matV should have the same batch size!\n");
+  }
+  if (!(matK.size(1) == numHeads && matV.size(1) == numHeads)) {
+    printf("matK & matV should have the same number of heads!\n");
+  }
+  // Note matrix K is transposed
+  if (!(matK.size(3) == seqLen && matV.size(2) == seqLen)) {
+    printf("matK & matV should have the same sequence length! Did you forget "
+           "to transpose K?\n");
+  }
+  if (!(matK.size(2) == dimHeads && matV.size(3) == dimHeads)) {
+    printf("matK & matV should have the same dimension of heads! Did you "
+           "forget to transpose K?\n");
+  }
 
   auto matC =
       torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matQ.options());
