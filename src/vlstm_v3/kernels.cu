@@ -193,13 +193,6 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
                                    scalar_t *matK, scalar_t *matV,
                                    int batchSize, int numHeads, int seqLen,
                                    int dimHeads) {
-  // // Block index
-  // const uint bx = blockIdx.x;
-  // const uint by = blockIdx.y;
-
-  // // Thread index
-  // const uint tx = threadIdx.x;
-  // const uint ty = threadIdx.y;
   // int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
 #ifdef DEBUG
   if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
@@ -208,17 +201,24 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
   }
 #endif
 
-  // Most outer loop: Loop over batchSize * numHeads
+  // Most outer loop: Loop over batchSize * numHeads (can be parallelized later
+  // along gridDim.z)
   const uint batchHeadStep = seqLen * dimHeads;
   const uint batchHeadEnd = batchSize * numHeads * batchHeadStep;
   for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd;
        batchHeadIdx += batchHeadStep) {
 
+    // access to Q (copy to C, no transpose)
     const uint qBlockIdx = batchHeadIdx + dimHeads * TblockDim * blockIdx.y +
                            TblockDim * blockIdx.x;
     const uint qThreadIdx = qBlockIdx + TblockDim * threadIdx.y + threadIdx.x;
 
-    matC[qThreadIdx] = matQ[qThreadIdx];
+    // access to K (copy to C, with transpose)
+    const uint kBlockIdx =
+        batchHeadIdx + seqLen * TblockDim * blockIdx.y + TblockDim * blockIdx.x;
+    const uint kThreadIdx = qBlockIdx + TblockDim * threadIdx.x + threadIdx.y;
+
+    matC[qThreadIdx] = matQ[kThreadIdx];
 
     __syncthreads();
 
