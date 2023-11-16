@@ -242,7 +242,7 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
 
     // Ends for looplevel 1&2:
     uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
-    uint kvTileEnd = seqLen / KVtileDim;
+    uint kvTileEnd = CEIL_DIV(seqLen, KVtileDim);
     // looplevel 1: loop over Qtile blocks along seqLen dim
     // Note: qTileIdx does not index into global memory
     for (uint qTileIdx = 0; qTileIdx <= qTileEnd; qTileIdx++) {
@@ -255,7 +255,7 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
       // TODO use dynamic shared memory!
       __shared__ scalar_t qTile[QtileDim][HD_SIZE];
 
-      // compute indices
+      //? qcTileIdxes
       // left upper corner of qTileBlock in Q
       const uint qcTileBlockIdx = qTileMemIdx +
                                   dimHeads * TblockDim * blockIdx.y +
@@ -273,9 +273,35 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
       __shared__ scalar_t cTile[QtileDim][HD_SIZE];
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
-      for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; kvTileIdx++) {
+      for (uint kvTileIdx = 0; kvTileIdx <= kvTileEnd; kvTileIdx++) {
+
+        // offset in K&V matrix for kTile & vTile
+        const uint kvTileMemIdx =
+            batchHeadMemIdx + kvTileIdx * dimHeads * TblockDim; // global memory
+
+        // init kTile and vTile in shared memory
+        __shared__ scalar_t kTile[KVtileDim][HD_SIZE];
+        __shared__ scalar_t vTile[KVtileDim][HD_SIZE];
+
+        //? kvTileIdxes
+        // left upper corner of kTileBlock in K
+        const uint kcTileBlockIdx = kvTileMemIdx +
+                                    dimHeads * TblockDim * blockIdx.x +
+                                    TblockDim * blockIdx.y;
+
+        const uint kcTileThreadIdx =
+            kcTileBlockIdx + dimHeads * threadIdx.y + threadIdx.x;
 
         // load kTile into shared memory
+        // We have enough threads to load the whole kvTile into shared memory
+        // kTile[blockIdx.x + threadIdx.y][blockIdx.y + threadIdx.x] =
+        //     matK[kcTileThreadIdx];
+        vTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x] =
+            matV[kcTileThreadIdx];
+        __syncthreads();
+
+        matC[qcTileThreadIdx] =
+            vTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x];
         // load vTile into shared memory
 
         // initialize sTile in shared memory for intermediate result of QK^T
@@ -283,13 +309,11 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
         // compute S = QK^T, i.e. fill sTile
 
         // compute C += S * V, i.e. fill cTile
-
-        __syncthreads();
       }
 
       // write cTile to global memory (has the same memory index as qTile)
-      matC[qcTileThreadIdx] =
-          qTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x];
+      // matC[qcTileThreadIdx] =
+      //     qTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x];
     }
 
     // const uint cx = bx * blockDim.x + tx;
