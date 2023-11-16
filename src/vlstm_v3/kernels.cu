@@ -1,3 +1,4 @@
+#include <cassert>
 
 #include <cuda.h>
 #include <cuda_bf16.h>
@@ -25,7 +26,7 @@ template <typename scalar_t, int BLOCKSIZE>
 __global__ void mmkernelv1(scalar_t *matC, scalar_t *matA, scalar_t *matB,
                            int m, int n, int k);
 
-template <typename scalar_t, int TblockDim>
+template <typename scalar_t, int TblockDim, int QblockDim, int KVblockDim>
 __global__ void qkvkernel(scalar_t *matC, scalar_t *matQ, scalar_t *matK,
                           scalar_t *matV, int batchSize, int numHeads,
                           int seqLen, int dimHeads);
@@ -183,21 +184,26 @@ template void kernel_dispatchers::mmkernelv1_dispatch<__half>(
 ////////////////////////////////////////////////////////////////////////////////////////
 
 #define TBLOCK_DIM 4 // TblockDim: corresponds to BLOCK_DIM in matmul
+#define QTILE_DIM 8  // QtileDim: TileDim for Q along seqLen dim
+#define KVTILE_DIM 8 // KVtileDim: TileDim for K&V along seqLen dim
 
 #define DEBUG 1
+#define DEBUG2 1
 
 /* QKV Kernel v1 */
 
-template <typename scalar_t, int TblockDim>
+template <typename scalar_t, int TblockDim, int QtileDim, int KVtileDim>
 __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
                                    scalar_t *matK, scalar_t *matV,
                                    int batchSize, int numHeads, int seqLen,
                                    int dimHeads) {
   // int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
 #ifdef DEBUG
-  if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
-    printf("In Kernel: gdim.x: %d, gdim.y: %d, bdim.x: %d, bdim.y: %d\n",
-           gridDim.x, gridDim.y, blockDim.x, blockDim.y);
+  if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+      (threadIdx.y == 0)) {
+    printf("In Kernel: gdim.x: %d, gdim.y: %d, gdim.z: %d, bdim.x: %d, bdim.y: "
+           "%d\n",
+           gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y);
   }
 #endif
 
@@ -208,20 +214,40 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
   for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd;
        batchHeadIdx += batchHeadStep) {
 
-    // access to Q (copy to C, no transpose)
-    const uint qBlockIdx = batchHeadIdx + dimHeads * TblockDim * blockIdx.y +
-                           TblockDim * blockIdx.x;
-    const uint qThreadIdx = qBlockIdx + TblockDim * threadIdx.y + threadIdx.x;
+    // access to Q & V (not transposed (S, DH))
+    const uint qvBlockIdx = batchHeadIdx + dimHeads * TblockDim * blockIdx.y +
+                            TblockDim * blockIdx.x;
+    const uint qvThreadIdx = qvBlockIdx + dimHeads * threadIdx.y + threadIdx.x;
 
-    // access to K (copy to C, with transpose)
+    // access to K (K is transposed (DH, S))
     const uint kBlockIdx =
-        batchHeadIdx + seqLen * TblockDim * blockIdx.y + TblockDim * blockIdx.x;
-    const uint kThreadIdx = qBlockIdx + TblockDim * threadIdx.x + threadIdx.y;
+        batchHeadIdx + seqLen * TblockDim * blockIdx.x + TblockDim * blockIdx.y;
+    const uint kThreadIdx = kBlockIdx + seqLen * threadIdx.y + threadIdx.x;
 
-    matC[qThreadIdx] = matQ[kThreadIdx];
-
+#ifdef DEBUG2
+    if ((threadIdx.x == 0) && (threadIdx.y == 2)) {
+      print_val("(bx,by) - Q", blockIdx.x, blockIdx.y, matQ[qvThreadIdx]);
+      // print_val("(ty,i) - Bs", ty, i, Bs[ty][i]);
+    }
+    matC[qvThreadIdx] = matQ[qvThreadIdx];
     __syncthreads();
+#endif
 
+    // Ends for looplevel 1/2:
+    uint qTileEnd = seqLen / QtileDim;
+    uint kvTileEnd = seqLen / KVtileDim;
+    // looplevel 1: loop over Qtile blocks along seqLen dim
+    for (uint qTileIdx = 0; qTileIdx < qTileEnd; qTileIdx++) {
+
+      // TODO load qTile
+      __syncthreads();
+
+      // looplevel 2: loop over KVtile blocks along seqLen dim
+      for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; kvTileIdx++) {
+        // TODO load kvTiles
+        __syncthreads();
+      }
+    }
     // const uint cx = bx * blockDim.x + tx;
     // const uint cy = by * blockDim.y + ty;
 
@@ -275,7 +301,8 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
     //         print_val("(ty,i) - Bs", ty, i, Bs[ty][i]);
     //       }
     //       Csub = add_g(Csub, mul_g(As[ty][i],
-    //                                Bs[i][tx])); // (threadlevel): each thread
+    //                                Bs[i][tx])); // (threadlevel): each
+    //                                thread
     //                                             // operates on TblockDim
     //                                             elements
     //       if ((cx == 0) && (cy == 9)) {
@@ -298,7 +325,14 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
                                             int seqLen, int dimHeads) {
   printf("B: %d, NH: %d, S: %d, DH: %d\n", batchSize, numHeads, seqLen,
          dimHeads);
-  const int TblockDim = TBLOCK_DIM; // Block
+  const int TblockDim = TBLOCK_DIM;  // matmul blockdim
+  const int QblockDim = QTILE_DIM;   // blockdim for Q along seqLen dim
+  const int KVblockDim = KVTILE_DIM; // blockdim for K&V along seqLen dim
+
+  // kernel asserts
+  if ((seqLen % QblockDim != 0) || (seqLen % KVblockDim != 0)) {
+    printf("seqLen must be divisible by QblockDim and KVblockDim\n");
+  }
 
   // determine the number of blocks and threads
   const dim3 blockDims(TblockDim, TblockDim);
@@ -308,8 +342,9 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
   printf("blocksxy: %d-%d, threads: %d-%d\n", gridDims.x, gridDims.y,
          blockDims.x, blockDims.y);
 
-  kernels::qkvkernel<scalar_t, TblockDim><<<gridDims, blockDims>>>(
-      matC, matQ, matK, matV, batchSize, numHeads, seqLen, dimHeads);
+  kernels::qkvkernel<scalar_t, TblockDim, QblockDim, KVblockDim>
+      <<<gridDims, blockDims>>>(matC, matQ, matK, matV, batchSize, numHeads,
+                                seqLen, dimHeads);
 
   gpuErrchk(cudaPeekAtLastError());
   gpuErrchk(cudaDeviceSynchronize());

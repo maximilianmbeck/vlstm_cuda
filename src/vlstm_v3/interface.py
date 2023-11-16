@@ -33,6 +33,12 @@ def mmkernelv1(mat_A: torch.Tensor, mat_B: torch.Tensor) -> torch.Tensor:
 def qkvkernel(
     mat_Q: torch.Tensor, mat_K: torch.Tensor, mat_V: torch.Tensor
 ) -> torch.Tensor:
+    mat_Q = mat_Q.contiguous()
+    # transpose K matrix in order to have coalesced access in the kernel
+    # Could do this also on C++ side
+    mat_K = mat_K.transpose(-1, -2).contiguous()
+    mat_V = mat_V.contiguous()
+
     out = cppmodule.qkvkernel(mat_Q, mat_K, mat_V)
 
     return out
