@@ -36,7 +36,7 @@ def qkvkernel(
     mat_Q = mat_Q.contiguous()
     # transpose K matrix in order to have coalesced access in the kernel
     # Could do this also on C++ side
-    mat_K = mat_K.transpose(-1, -2).contiguous()
+    mat_K = mat_K.contiguous()
     mat_V = mat_V.contiguous()
 
     out = cppmodule.qkvkernel(mat_Q, mat_K, mat_V)

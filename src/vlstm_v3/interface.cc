@@ -55,11 +55,11 @@ Tensor interface::qkvkernel(Tensor matQ, Tensor matK, Tensor matV) {
     printf("matK & matV should have the same number of heads!\n");
   }
   // Note matrix K is transposed
-  if (!(matK.size(3) == seqLen && matV.size(2) == seqLen)) {
+  if (!(matK.size(1) == seqLen && matV.size(2) == seqLen)) {
     printf("matK & matV should have the same sequence length! Did you forget "
            "to transpose K?\n");
   }
-  if (!(matK.size(2) == dimHeads && matV.size(3) == dimHeads)) {
+  if (!(matK.size(3) == dimHeads && matV.size(3) == dimHeads)) {
     printf("matK & matV should have the same dimension of heads! Did you "
            "forget to transpose K?\n");
   }
