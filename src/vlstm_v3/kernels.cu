@@ -224,6 +224,9 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
            gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y);
   }
 #endif
+
+  cg::grid_group gridGroup = cg::this_grid();
+
   // Assign threads to x-y-coordinates for accessing shared memory tiles
   const uint tileX = blockIdx.x * blockDim.x + threadIdx.x;
   const uint tileY = blockIdx.y * blockDim.y + threadIdx.y;
@@ -242,6 +245,8 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
 #ifdef DEBUG
     if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
         (threadIdx.y == 0)) {
+      printf("In Kernel: QtileDim: %d, KVtileDim: %d, TblockDim:%d\n", QtileDim,
+             KVtileDim, TblockDim);
       printf("In Kernel: qTileEnd: %d, kvTileEnd: %d\n", qTileEnd, kvTileEnd);
     }
 #endif
@@ -270,10 +275,10 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
       // We have enough threads to load the whole qTile into shared memory
       // load qTile into shared memory
       qTile[tileY][tileX] = matQ[qcTileThreadMemIdx];
-      __syncthreads();
+      gridGroup.sync();
 
       // initialize result cTile in shared memory
-      __shared__ scalar_t cTile[QtileDim][HD_SIZE];
+      // __shared__ scalar_t cTile[QtileDim][HD_SIZE];
       scalar_t c_acc = dscalar_zero<scalar_t>();
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
@@ -306,7 +311,12 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
         kTile[tileY][tileX] = matK[kcTileThreadMemIdx];
         // load vTile into shared memory
         vTile[tileY][tileX] = matV[kcTileThreadMemIdx];
-        __syncthreads();
+        gridGroup.sync();
+#ifdef DEBUG3
+        printf("B<%d,%d>T<%d,%d> - kTile[%d][%d]: %f\n", blockIdx.x, blockIdx.y,
+               threadIdx.x, threadIdx.y, tileY, tileX,
+               type2float(kTile[tileY][tileX]));
+#endif
 
         //! compute S = Q x K^T, i.e. fill sTile
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
@@ -314,30 +324,42 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
         // TODO: What to do with the left over threads? (currently idle)
         // only use threads that fall into the sTile
         if ((tileY) < QtileDim && (tileX) < KVtileDim) {
+#ifdef DEBUG3
+          printf("B<%d,%d>T<%d,%d> - kTile[%d][%d]: %f\n", blockIdx.x,
+                 blockIdx.y, threadIdx.x, threadIdx.y, tileY, tileX,
+                 type2float(kTile[tileY][tileX]));
+#endif
           scalar_t qk_acc = dscalar_zero<scalar_t>();
           for (uint i = 0; i < dimHeads; ++i) {
 #ifdef DEBUG2
-            if (tileX < 3 && tileY <= 4) {
-              // printf("B<%d,%d>T<%d,%d> - kvTidx(%d) qTile[%d][%d]: %f\n",
-              //        blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y,
-              //        kvTileIdx, tileY, i, type2float(qTile[tileY][i]));
-              printf("B<%d,%d>T<%d,%d> - kvTidx(%d) kTile[%d][%d]: %f\n",
-                     blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y,
-                     kvTileIdx, tileX, i, type2float(kTile[tileX][i]));
-              printf("B<%d,%d>T<%d,%d> - kvTidx(%d) vTile[%d][%d]: %f\n",
-                     blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y,
-                     kvTileIdx, tileX, i, type2float(vTile[tileX][i]));
+            if (tileX == 0 && tileY == 3) {
+              printf("1-B<%d,%d>T<%d,%d> - qTile[%d][%d]: %f\n", blockIdx.x,
+                     blockIdx.y, threadIdx.x, threadIdx.y, tileY, i,
+                     type2float(qTile[tileY][i]));
+              printf("1-B<%d,%d>T<%d,%d> - kTile[%d][%d]: %f\n", blockIdx.x,
+                     blockIdx.y, threadIdx.x, threadIdx.y, tileX, i,
+                     type2float(kTile[tileX][i]));
+            }
+            if (tileX == 0 && tileY == 4) {
+              printf("2-B<%d,%d>T<%d,%d> - qTile[%d][%d]: %f\n", blockIdx.x,
+                     blockIdx.y, threadIdx.x, threadIdx.y, tileY, i,
+                     type2float(qTile[tileY][i]));
+              printf("2-B<%d,%d>T<%d,%d> - kTile[%d][%d]: %f\n", blockIdx.x,
+                     blockIdx.y, threadIdx.x, threadIdx.y, tileX, i,
+                     type2float(kTile[tileX][i]));
             }
 #endif
 
             qk_acc = add_g(qk_acc, mul_g(qTile[tileY][i], kTile[tileX][i]));
-#ifdef DEBUG2
-            if (tileX == 0 && tileY == 4) {
-              printf("B<%d,%d>T<%d,%d> - kvTidx(%d) i(%d) qk_acc: %f\n",
-                     blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y,
-                     kvTileIdx, i, type2float(qk_acc));
-            }
-#endif
+            // #ifdef DEBUG2
+            //             if (tileX == 0 && tileY == 4) {
+            //               printf("B<%d,%d>T<%d,%d> - kvTidx(%d) i(%d) qk_acc:
+            //               %f\n",
+            //                      blockIdx.x, blockIdx.y, threadIdx.x,
+            //                      threadIdx.y, kvTileIdx, i,
+            //                      type2float(qk_acc));
+            //             }
+            // #endif
           }
           sTile[tileY][tileX] = qk_acc;
 #ifdef DEBUG3
@@ -354,7 +376,7 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
           }
 #endif
         }
-        __syncthreads();
+        gridGroup.sync();
 
         //! compute C += S * V, i.e. fill cTile
         // (QtileDim,dimHeads) = (QtileDim,KVtileDim) x (KVtileDim,dimHeads)
@@ -370,7 +392,7 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
           //     threadIdx.x],
           //           sv_acc);
         }
-        __syncthreads();
+        gridGroup.sync();
         matC[qcTileThreadMemIdx] = kTile[tileY][tileX];
       }
 
@@ -409,19 +431,10 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
   printf("blocksxy: %d-%d, threads: %d-%d\n", gridDims.x, gridDims.y,
          blockDims.x, blockDims.y);
 
-  // void *pMatC = (void *)matC;
-  // void *pMatQ = (void *)matQ;
-  // void *pMatK = (void *)matK;
-  // void *pMatV = (void *)matV;
-  // void *pBatchSize = (void *)&batchSize;
-  // void *pNumHeads = (void *)&numHeads;
-  // void *pSeqLen = (void *)&seqLen;
-  // void *pDimHeads = (void *)&dimHeads;
   // TODO calculate dynamic shared memory size
 
   cudaSetDevice(0);
 
-  /// THIS DOES NOT WORK
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
@@ -435,18 +448,13 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
   //                      sharedMemorySize);
 
   // define void* pointers to the kernel arguments
-  void *kernelArgs[] = {(void *)matC,    (void *)matQ,       (void *)matK,
-                        (void *)matV,    (void *)&batchSize, (void *)&numHeads,
+  void *kernelArgs[] = {(void *)&matC,   (void *)&matQ,      (void *)&matK,
+                        (void *)&matV,   (void *)&batchSize, (void *)&numHeads,
                         (void *)&seqLen, (void *)&dimHeads};
-  // void *kernelArgs[] = {(void *)&(*matC), (void *)&(*matQ),   (void
-  // *)&(*matK),
-  //                       (void *)&(*matV), (void *)&batchSize, (void
-  //                       *)&numHeads, (void *)&seqLen,  (void *)&dimHeads};
 
   cudaLaunchCooperativeKernel((void *)kernel, gridDims, blockDims, kernelArgs,
                               0, stream);
 
-  /// THIS WORKS
   // kernels::qkvkernel<scalar_t, TblockDim, QtileDim, KVtileDim>
   //     <<<gridDims, blockDims>>>(matC, matQ, matK, matV, batchSize, numHeads,
   //                               seqLen, dimHeads);

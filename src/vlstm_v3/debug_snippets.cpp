@@ -9,13 +9,10 @@ if ((blockIdx.y == 0) && (threadIdx.y == 0) && (blockIdx.x == 0) &&
 }
 #endif
 
-// #ifdef DEBUG
-//           if ((blockIdx.y == 0) && (blockIdx.x == 0)) {
-//             printf(
-//                 "sTile[%d][%d]: %f\n", blockIdx.y + threadIdx.y,
-//                 blockIdx.x + threadIdx.x,
-//                 type2float(
-//                     sTile[blockIdx.y + threadIdx.y][blockIdx.x +
-//                     threadIdx.x]));
-//           }
-// #endif
+#ifdef DEBUG
+if ((blockIdx.y == 0) && (blockIdx.x == 0)) {
+  printf("sTile[%d][%d]: %f\n", blockIdx.y + threadIdx.y,
+         blockIdx.x + threadIdx.x,
+         type2float(sTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x]));
+}
+#endif
