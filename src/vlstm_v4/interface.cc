@@ -11,36 +11,6 @@
 
 namespace vlstm {
 
-Tensor interface::mmkernelv1(Tensor matA, Tensor matB) {
-  const auto m = matA.size(0);
-  const auto k = matA.size(1);
-  const auto n = matB.size(1);
-  auto matC = torch::zeros({m, n}, matA.options());
-
-  AT_DISPATCH_FLOATING_TYPES_AND_HALF2(
-      matA.scalar_type(), "mmkernelv1", ([&] {
-        if (std::is_same<scalar_t, at::BFloat16>::value) {
-          printf("before kernel dispatch - bfloat16!\n");
-          kernel_dispatchers::mmkernelv1_dispatch<__nv_bfloat16>(
-              reinterpret_cast<__nv_bfloat16 *>(matC.data_ptr<scalar_t>()),
-              reinterpret_cast<__nv_bfloat16 *>(matA.data_ptr<scalar_t>()),
-              reinterpret_cast<__nv_bfloat16 *>(matB.data_ptr<scalar_t>()), m,
-              n, k);
-        } else if (std::is_same<scalar_t, at::Half>::value) {
-          printf("before kernel dispatch - float16!\n");
-          kernel_dispatchers::mmkernelv1_dispatch<__half>(
-              reinterpret_cast<__half *>(matC.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(matA.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(matB.data_ptr<scalar_t>()), m, n, k);
-
-        } else {
-          printf("No kernel for this dtype available.\n");
-        }
-      }));
-
-  return matC;
-}
-
 Tensor interface::qkvkernel(Tensor matQ, Tensor matK, Tensor matV) {
   const auto batchSize = matQ.size(0);
   const auto numHeads = matQ.size(1);
@@ -95,6 +65,5 @@ Tensor interface::qkvkernel(Tensor matQ, Tensor matK, Tensor matV) {
 } // namespace vlstm
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
-  m.def("mmkernelv1", &vlstm::interface::mmkernelv1, "A mm kernel.");
   m.def("qkvkernel", &vlstm::interface::qkvkernel, "A qkv kernel.");
 }

@@ -24,12 +24,6 @@ class CppModule(object):
 cppmodule = CppModule.instance()
 
 
-def mmkernelv1(mat_A: torch.Tensor, mat_B: torch.Tensor) -> torch.Tensor:
-    out = cppmodule.mmkernelv1(mat_A, mat_B)
-
-    return out
-
-
 def qkvkernel(
     mat_Q: torch.Tensor, mat_K: torch.Tensor, mat_V: torch.Tensor
 ) -> torch.Tensor:
