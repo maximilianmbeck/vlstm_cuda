@@ -191,7 +191,16 @@ template void kernel_dispatchers::mmkernelv1_dispatch<__half>(
   64 // HD_SIZE: size of the allocated shared memory for the hidden dim
 
 #define DEBUG 1
-// #define DEBUG2 1
+#define DEBUG2 1
+// #define DEBUG3 1
+
+/**
+Conventions:
+
+..MemIdx - indices into global memory
+..tileX / ..tileY - indices into shared memory tiles
+
+*/
 
 /* QKV Kernel v1 */
 
@@ -209,34 +218,17 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
            gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y);
   }
 #endif
+  // Assign threads to x-y-coordinates for accessing shared memory tiles
+  const uint tileX = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint tileY = blockIdx.y * blockDim.y + threadIdx.y;
 
   // Most outer loop: Loop over batchSize * numHeads (can be parallelized later
   // along gridDim.z)
   const uint batchHeadStep = seqLen * dimHeads;
   const uint batchHeadEnd = batchSize * numHeads * batchHeadStep;
-  //! Note: batchHeadIdx indices into global memory
+  //! Note: batchHeadMemIdx indices into global memory
   for (uint batchHeadMemIdx = 0; batchHeadMemIdx < batchHeadEnd;
        batchHeadMemIdx += batchHeadStep) {
-
-    // access to Q & V (not transposed (S, DH))
-    const uint qvBlockIdx = batchHeadMemIdx +
-                            dimHeads * TblockDim * blockIdx.y +
-                            TblockDim * blockIdx.x;
-    const uint qvThreadIdx = qvBlockIdx + dimHeads * threadIdx.y + threadIdx.x;
-
-    // access to K (K is transposed (DH, S))
-    const uint kBlockIdx = batchHeadMemIdx + seqLen * TblockDim * blockIdx.x +
-                           TblockDim * blockIdx.y;
-    const uint kThreadIdx = kBlockIdx + seqLen * threadIdx.y + threadIdx.x;
-
-#ifdef DEBUG2
-    if ((threadIdx.x == 0) && (threadIdx.y == 2)) {
-      print_val("(bx,by) - Q", blockIdx.x, blockIdx.y, matQ[qvThreadIdx]);
-      // print_val("(ty,i) - Bs", ty, i, Bs[ty][i]);
-    }
-    matC[qvThreadIdx] = matQ[qvThreadIdx];
-    __syncthreads();
-#endif
 
     // Ends for looplevel 1&2:
     uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
@@ -263,20 +255,20 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
       //! qTile Loading
       //? qcTileIdxes
       // left upper corner of qTileBlock in Q
-      const uint qcTileBlockIdx = qTileMemIdx +
-                                  dimHeads * TblockDim * blockIdx.y +
-                                  TblockDim * blockIdx.x;
-      const uint qcTileThreadIdx =
-          qcTileBlockIdx + dimHeads * threadIdx.y + threadIdx.x;
+      const uint qcTileBlockMemIdx = qTileMemIdx +
+                                     dimHeads * TblockDim * blockIdx.y +
+                                     TblockDim * blockIdx.x;
+      const uint qcTileThreadMemIdx =
+          qcTileBlockMemIdx + dimHeads * threadIdx.y + threadIdx.x;
 
       // We have enough threads to load the whole qTile into shared memory
       // load qTile into shared memory
-      qTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x] =
-          matQ[qcTileThreadIdx];
+      qTile[tileY][tileX] = matQ[qcTileThreadMemIdx];
       __syncthreads();
 
       // initialize result cTile in shared memory
       __shared__ scalar_t cTile[QtileDim][HD_SIZE];
+      scalar_t c_acc = dscalar_zero<scalar_t>();
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
       for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
@@ -289,62 +281,95 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
         __shared__ scalar_t kTile[KVtileDim][HD_SIZE];
         __shared__ scalar_t vTile[KVtileDim][HD_SIZE];
 
-        // init sTile in shared memory for intermediate result of QK^T
+        // init sTile (QtileDim x KVTileDim) in shared memory for intermediate
+        // result of QK^T
         __shared__ scalar_t sTile[QtileDim][KVtileDim];
 
         //! kTile & vTile Loading
         //? kvTileIdxes
         // left upper corner of kTileBlock in K
-        const uint kcTileBlockIdx = kvTileMemIdx +
-                                    dimHeads * TblockDim * blockIdx.y +
-                                    TblockDim * blockIdx.x;
+        const uint kcTileBlockMemIdx = kvTileMemIdx +
+                                       dimHeads * TblockDim * blockIdx.y +
+                                       TblockDim * blockIdx.x;
 
-        const uint kcTileThreadIdx =
-            kcTileBlockIdx + dimHeads * threadIdx.y + threadIdx.x;
+        const uint kcTileThreadMemIdx =
+            kcTileBlockMemIdx + dimHeads * threadIdx.y + threadIdx.x;
 
         // We have enough threads to load the whole kvTile into shared memory
         // load kTile into shared memory
-        kTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x] =
-            matK[kcTileThreadIdx];
+        kTile[tileY][tileX] = matK[kcTileThreadMemIdx];
         // load vTile into shared memory
-        vTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x] =
-            matV[kcTileThreadIdx];
+        vTile[tileY][tileX] = matV[kcTileThreadMemIdx];
         __syncthreads();
 
         //! compute S = Q x K^T, i.e. fill sTile
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
         // each thread computes one entry in the sTile
-        // TODO: What to do with the left over threads?
-        scalar_t qk_acc = dscalar_zero<scalar_t>();
-        if ((blockIdx.y + threadIdx.y) < QtileDim &&
-            (blockIdx.x + threadIdx.x) < KVtileDim) {
+        // TODO: What to do with the left over threads? (currently idle)
+        // only use threads that fall into the sTile
+        if ((tileY) < QtileDim && (tileX) < KVtileDim) {
+          scalar_t qk_acc = dscalar_zero<scalar_t>();
           for (uint i = 0; i < dimHeads; ++i) {
-            qk_acc = add_g(qk_acc, mul_g(qTile[blockIdx.y + threadIdx.y][i],
-                                         kTile[blockIdx.x + threadIdx.x][i]));
+#ifdef DEBUG2
+            if (tileX < 3 && tileY <= 4) {
+              // printf("B<%d,%d>T<%d,%d> - kvTidx(%d) qTile[%d][%d]: %f\n",
+              //        blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y,
+              //        kvTileIdx, tileY, i, type2float(qTile[tileY][i]));
+              printf("B<%d,%d>T<%d,%d> - kvTidx(%d) kTile[%d][%d]: %f\n",
+                     blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y,
+                     kvTileIdx, tileX, i, type2float(kTile[tileX][i]));
+              printf("B<%d,%d>T<%d,%d> - kvTidx(%d) vTile[%d][%d]: %f\n",
+                     blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y,
+                     kvTileIdx, tileX, i, type2float(vTile[tileX][i]));
+            }
+#endif
+
+            qk_acc = add_g(qk_acc, mul_g(qTile[tileY][i], kTile[tileX][i]));
+#ifdef DEBUG2
+            if (tileX == 0 && tileY == 4) {
+              printf("B<%d,%d>T<%d,%d> - kvTidx(%d) i(%d) qk_acc: %f\n",
+                     blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y,
+                     kvTileIdx, i, type2float(qk_acc));
+            }
+#endif
           }
-          sTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x] = qk_acc;
+          sTile[tileY][tileX] = qk_acc;
+#ifdef DEBUG3
+          if (tileX == 0) {
+            printf("B<%d,%d>T<%d,%d> - kvTidx(%d) sTile[%d][%d]: %f\n",
+                   blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y, kvTileIdx,
+                   tileY, tileX, type2float(sTile[tileY][tileX]));
+            printf("B<%d,%d>T<%d,%d> - kvTidx(%d) qTile[%d][%d]: %f\n",
+                   blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y, kvTileIdx,
+                   tileY, tileX, type2float(qTile[tileY][tileX]));
+            printf("B<%d,%d>T<%d,%d> - kvTidx(%d) kTile[%d][%d]: %f\n",
+                   blockIdx.x, blockIdx.y, threadIdx.x, threadIdx.y, kvTileIdx,
+                   tileY, tileX, type2float(kTile[tileY][tileX]));
+          }
+#endif
         }
         __syncthreads();
 
         //! compute C += S * V, i.e. fill cTile
         // (QtileDim,dimHeads) = (QtileDim,KVtileDim) x (KVtileDim,dimHeads)
-        if ((blockIdx.y + threadIdx.y) < QtileDim &&
-            (blockIdx.x + threadIdx.x) < dimHeads) { // should always be true
+        // only use threads that fall into the cTile (should be all threads)
+        if ((tileY) < QtileDim && (tileX) < dimHeads) {
           scalar_t sv_acc = dscalar_zero<scalar_t>();
           for (uint i = 0; i < KVtileDim; ++i) {
-            sv_acc = add_g(sv_acc, mul_g(sTile[blockIdx.y + threadIdx.y][i],
-                                         vTile[i][blockIdx.x + threadIdx.x]));
+            sv_acc = add_g(sv_acc, mul_g(sTile[tileY][i], vTile[i][tileX]));
           }
-          cTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x] =
-              add_g(cTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x],
-                    sv_acc);
+          c_acc = add_g(c_acc, sv_acc);
+          // cTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x] =
+          //     add_g(cTile[blockIdx.y + threadIdx.y][blockIdx.x +
+          //     threadIdx.x],
+          //           sv_acc);
         }
         __syncthreads();
+        matC[qcTileThreadMemIdx] = kTile[tileY][tileX];
       }
 
       //! write cTile to global memory (has the same memory index as qTile)
-      matC[qcTileThreadIdx] =
-          cTile[blockIdx.y + threadIdx.y][blockIdx.x + threadIdx.x];
+      // matC[qcTileThreadMemIdx] = c_acc;
       __syncthreads();
     }
   }
@@ -357,12 +382,12 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
                                             int seqLen, int dimHeads) {
   printf("B: %d, NH: %d, S: %d, DH: %d\n", batchSize, numHeads, seqLen,
          dimHeads);
-  const int TblockDim = TBLOCK_DIM;  // matmul blockdim
-  const int QblockDim = QTILE_DIM;   // blockdim for Q along seqLen dim
-  const int KVblockDim = KVTILE_DIM; // blockdim for K&V along seqLen dim
+  const int TblockDim = TBLOCK_DIM; // matmul blockdim
+  const int QtileDim = QTILE_DIM;   // blockdim for Q along seqLen dim
+  const int KVtileDim = KVTILE_DIM; // blockdim for K&V along seqLen dim
 
   // kernel asserts
-  if ((seqLen % QblockDim != 0) || (seqLen % KVblockDim != 0)) {
+  if ((seqLen % QtileDim != 0) || (seqLen % KVtileDim != 0)) {
     printf("seqLen must be divisible by QblockDim and KVblockDim\n");
   }
 
@@ -374,11 +399,11 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
   const dim3 blockDims(TblockDim, TblockDim);
 
   const dim3 gridDims(CEIL_DIV(dimHeads, blockDims.x),
-                      CEIL_DIV(QblockDim, blockDims.y));
+                      CEIL_DIV(QtileDim, blockDims.y));
   printf("blocksxy: %d-%d, threads: %d-%d\n", gridDims.x, gridDims.y,
          blockDims.x, blockDims.y);
 
-  kernels::qkvkernel<scalar_t, TblockDim, QblockDim, KVblockDim>
+  kernels::qkvkernel<scalar_t, TblockDim, QtileDim, KVtileDim>
       <<<gridDims, blockDims>>>(matC, matQ, matK, matV, batchSize, numHeads,
                                 seqLen, dimHeads);
 
