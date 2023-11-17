@@ -1,8 +1,11 @@
+#include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda.h>
 #include <cuda_bf16.h>
+#include <cuda_device_runtime_api.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <cuda_runtime_api.h>
 #include <driver_types.h>
 
 #include "../util/cuda_errorcheck.h"
@@ -16,6 +19,8 @@
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
 namespace vlstm {
+
+namespace cg = cooperative_groups;
 
 namespace kernels {
 
@@ -183,8 +188,9 @@ template void kernel_dispatchers::mmkernelv1_dispatch<__half>(
 ////////////////////////////////////////////////////////////////////////////////////////
 
 #define TBLOCK_DIM 4 // TblockDim: corresponds to BLOCK_DIM in matmul
-#define QTILE_DIM 8  // QtileDim: TileDim for Q along seqLen dim
 #define KVTILE_DIM 8 // KVtileDim: TileDim for K&V along seqLen dim
+// QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM
+#define QTILE_DIM 8 // QtileDim: TileDim for Q along seqLen dim
 
 // TODO use dynamic shared memory!
 #define HD_SIZE                                                                \
@@ -403,12 +409,55 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
   printf("blocksxy: %d-%d, threads: %d-%d\n", gridDims.x, gridDims.y,
          blockDims.x, blockDims.y);
 
-  kernels::qkvkernel<scalar_t, TblockDim, QtileDim, KVtileDim>
-      <<<gridDims, blockDims>>>(matC, matQ, matK, matV, batchSize, numHeads,
-                                seqLen, dimHeads);
+  // void *pMatC = (void *)matC;
+  // void *pMatQ = (void *)matQ;
+  // void *pMatK = (void *)matK;
+  // void *pMatV = (void *)matV;
+  // void *pBatchSize = (void *)&batchSize;
+  // void *pNumHeads = (void *)&numHeads;
+  // void *pSeqLen = (void *)&seqLen;
+  // void *pDimHeads = (void *)&dimHeads;
+  // TODO calculate dynamic shared memory size
 
+  cudaSetDevice(0);
+
+  /// THIS DOES NOT WORK
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
+
+  auto kernel = kernels::qkvkernel<scalar_t, TblockDim, QtileDim, KVtileDim>;
+  // cudaFuncSetAttribute(kernel,
+  // cudaFuncAttributePreferredSharedMemoryCarveout,
+  //                      cudaSharedmemCarveoutMaxShared);
+  // TODO dynamic shared memory
+  // cudaFuncSetAttribute(kernel,
+  // cudaFuncAttributeMaxDynamicSharedMemorySize,
+  //                      sharedMemorySize);
+
+  // define void* pointers to the kernel arguments
+  void *kernelArgs[] = {(void *)matC,    (void *)matQ,       (void *)matK,
+                        (void *)matV,    (void *)&batchSize, (void *)&numHeads,
+                        (void *)&seqLen, (void *)&dimHeads};
+  // void *kernelArgs[] = {(void *)&(*matC), (void *)&(*matQ),   (void
+  // *)&(*matK),
+  //                       (void *)&(*matV), (void *)&batchSize, (void
+  //                       *)&numHeads, (void *)&seqLen,  (void *)&dimHeads};
+
+  cudaLaunchCooperativeKernel((void *)kernel, gridDims, blockDims, kernelArgs,
+                              0, stream);
+
+  /// THIS WORKS
+  // kernels::qkvkernel<scalar_t, TblockDim, QtileDim, KVtileDim>
+  //     <<<gridDims, blockDims>>>(matC, matQ, matK, matV, batchSize, numHeads,
+  //                               seqLen, dimHeads);
   gpuErrchk(cudaPeekAtLastError());
+
+  cudaStreamSynchronize(stream);
+  cudaStreamDestroy(stream);
   gpuErrchk(cudaDeviceSynchronize());
+
+  // gpuErrchk(cudaPeekAtLastError());
+  // gpuErrchk(cudaDeviceSynchronize());
 }
 
 // this is needed to make sure that the compiler instantiates the template
