@@ -212,3 +212,11 @@ __device__ __forceinline__ __nv_bfloat16 max_g(const __nv_bfloat16 a,
                                                const __nv_bfloat16 b) {
   return __hmax(a, b);
 }
+
+template <> __device__ __forceinline__ float type2float(const __nv_bfloat16 x) {
+  return __bfloat162float(x);
+}
+
+template <> __device__ __forceinline__ __nv_bfloat16 float2type(const float x) {
+  return __float2bfloat16(x);
+}

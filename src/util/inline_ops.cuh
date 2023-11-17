@@ -233,10 +233,29 @@ __device__ __forceinline__ bool high_half_gt_zero_2h(const T x);
 template <typename T, typename HT>
 __device__ __forceinline__ T join_halves_2h(const HT x, const HT y);
 
-#pragma message(AT " CUDART_VERSION: " TOSTRING(CUDART_VERSION) ", arch: "     \
-                    TOSTRING(__CUDA_ARCH__))
+template <typename T> __device__ __forceinline__ float type2float(const T x);
 
-#if CUDART_VERSION >= 11000 && __CUDA_ARCH__ >= 750 //600
+template <> __device__ __forceinline__ float type2float(const float x) {
+  return x;
+}
+
+template <> __device__ __forceinline__ float type2float(const double x) {
+  return (double)x;
+}
+
+template <typename T> __device__ __forceinline__ T float2type(const float x);
+
+template <> __device__ __forceinline__ float float2type(const float x) {
+  return x;
+}
+template <> __device__ __forceinline__ double float2type(const float x) {
+  return (double)x;
+}
+
+#pragma message(AT " CUDART_VERSION: " TOSTRING(                               \
+        CUDART_VERSION) ", arch: " TOSTRING(__CUDA_ARCH__))
+
+#if CUDART_VERSION >= 11000 && __CUDA_ARCH__ >= 750 // 600
 
 #pragma message("INCLUDING FP16")
 
@@ -245,7 +264,8 @@ __device__ __forceinline__ T join_halves_2h(const HT x, const HT y);
 #include "inline_ops_2fp16.cuh"
 
 #else
-#pragma message("SKIPPING FP16, because of CUDART_VERSION: " TOSTRING(CUDART_VERSION) ", arch: " TOSTRING(__CUDA_ARCH__))
+#pragma message("SKIPPING FP16, because of CUDART_VERSION: " TOSTRING(         \
+        CUDART_VERSION) ", arch: " TOSTRING(__CUDA_ARCH__))
 #endif
 
 #if CUDART_VERSION >= 11020 && __CUDA_ARCH__ >= 800
@@ -257,5 +277,6 @@ __device__ __forceinline__ T join_halves_2h(const HT x, const HT y);
 #include "inline_ops_2bf16.cuh"
 
 #else
-#pragma message("SKIPPING BF16, because of CUDART_VERSION: " TOSTRING(CUDART_VERSION) ", arch: " TOSTRING(__CUDA_ARCH__))
+#pragma message("SKIPPING BF16, because of CUDART_VERSION: " TOSTRING(         \
+        CUDART_VERSION) ", arch: " TOSTRING(__CUDA_ARCH__))
 #endif

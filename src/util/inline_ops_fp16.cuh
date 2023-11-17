@@ -27,7 +27,7 @@
 #if CUDART_VERSION >= 11000
 #include <cuda_fp16.h>
 #pragma message(AT " CUDART_VERSION with FP16: " TOSTRING(                     \
-    CUDART_VERSION) ", CUDA_ARCH: " TOSTRING(__CUDA_ARCH__))
+        CUDART_VERSION) ", CUDA_ARCH: " TOSTRING(__CUDA_ARCH__))
 #else
 #pragma message(AT " CUDART_VERSION: " TOSTRING(CUDART_VERSION))
 #endif
@@ -173,4 +173,12 @@ __device__ __forceinline__ __half d_tanh_g(const __half tanh_output) {
 template <>
 __device__ __forceinline__ __half max_g(const __half a, const __half b) {
   return __hmax(a, b);
+}
+
+template <> __device__ __forceinline__ float type2float(const __half x) {
+  return __half2float(x);
+}
+
+template <> __device__ __forceinline__ __half float2type(const float x) {
+  return __float2half(x);
 }
