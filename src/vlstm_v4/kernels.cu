@@ -45,7 +45,8 @@ __global__ void qkvkernel(scalar_t *matC, scalar_t *matQ, scalar_t *matK,
 #define DEBUG 1
 // #define DEBUG2 1
 // #define DEBUG3 1
-#define DEBUG4 1
+// #define DEBUG4 1
+#define DEBUG5 1
 
 /**
 Conventions:
@@ -95,35 +96,55 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
   // init result cTile in shared memory
   __shared__ scalar_t cTile[QtileDim][HD_SIZE];
 
-  // TODO Most outer loop: parallelize along gridDim.x
-  // Most outer loop: Loop over batchSize * numHeads (can be parallelized later
-  // along gridDim.y)
+  //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStep = seqLen * dimHeads;
-  const uint batchHeadEnd = batchSize * numHeads * batchHeadStep;
-  //! Note: batchHeadMemIdx indices into global memory
-  for (uint batchHeadMemIdx = 0; batchHeadMemIdx < batchHeadEnd;
-       batchHeadMemIdx += batchHeadStep) {
+  const uint numBatchHeads = batchSize * numHeads;
+  const uint batchHeadEnd = CEIL_DIV(numBatchHeads, gridDim.x);
+  for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd; ++batchHeadIdx) {
 
+    uint batchHeadGridXGlobalMemIdx =
+        (batchHeadStep * gridDim.x) * batchHeadIdx + (batchHeadStep)*blockIdx.x;
+
+#ifdef DEBUG5
+    if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
+      printf("B<%d,%d> batchHeadIdx: %d, batchHeadEnd: %d, "
+             "batchHeadGridXGlobalMemIdx: "
+             "%d\n",
+             blockIdx.x, blockIdx.y, batchHeadIdx, batchHeadEnd,
+             batchHeadGridXGlobalMemIdx);
+    }
+#endif
+
+    //! PARALLELIZE ALONG SEQLEN (gridDim.y)
     // Ends for looplevel 1&2:
-    const uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
+    const uint qTileEnd = CEIL_DIV(seqLen, QtileDim * gridDim.y);
     const uint kvTileEnd = CEIL_DIV(seqLen, KVtileDim);
-    // TODO add looplevel 0: parallelize along gridDim.y
     // looplevel 1: loop over Qtile blocks along seqLen dim
-    // Note: qTileIdx does not index into global memory
     for (uint qTileIdx = 0; qTileIdx < qTileEnd; ++qTileIdx) {
 
       // offset in Q matrix for qTile (global memory)
-      const uint qTileGridGlobalMemIdx =
-          batchHeadMemIdx + (dimHeads * QtileDim * gridDim.y) * qTileIdx;
+      const uint qTileGridXYGlobalMemIdx =
+          batchHeadGridXGlobalMemIdx +
+          (dimHeads * QtileDim * gridDim.y) * qTileIdx;
       const uint qTileBlockGlobalMemIdx =
-          qTileGridGlobalMemIdx + dimHeads * blockDim.y * blockIdx.y;
+          qTileGridXYGlobalMemIdx + (dimHeads * QtileDim) * blockIdx.y;
+
+#ifdef DEBUG5
+      if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
+        printf("B<%d,%d> qTileIdx: %d, qTileEnd: %d, "
+               "qTileBlockGlobalMemIdx: "
+               "%d, \n",
+               blockIdx.x, blockIdx.y, qTileIdx, qTileEnd,
+               qTileBlockGlobalMemIdx);
+      }
+#endif
 
 #ifdef DEBUG2
       if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
           (threadIdx.y == 0)) {
-        printf("qTileIdx=%d: qTileEnd: %d, qTileGridGlobalMemIdx: %d, "
+        printf("qTileIdx=%d: qTileEnd: %d, qTileGridXYGlobalMemIdx: %d, "
                "qTileBlockGlobalMemIdx: %d\n",
-               qTileIdx, qTileEnd, qTileGridGlobalMemIdx,
+               qTileIdx, qTileEnd, qTileGridXYGlobalMemIdx,
                qTileBlockGlobalMemIdx);
       }
 #endif
@@ -177,7 +198,7 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
 
         // offset in K&V matrix for kTile & vTile (global memory)
         const uint kvTileBlockGlobalMemIdx =
-            batchHeadMemIdx + (dimHeads * KVtileDim) * kvTileIdx;
+            batchHeadGridXGlobalMemIdx + (dimHeads * KVtileDim) * kvTileIdx;
 
         //! kTile & vTile Loading
         // loops over rows (outer) and columns (inner) of kTile & vTile
@@ -368,15 +389,22 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
   // determine the number of blocks and threads
   const dim3 blockDims(TblockDim, TblockDim);
 
-  // const dim3 gridDims(CEIL_DIV(dimHeads, blockDims.x),
-  //                     CEIL_DIV(QtileDim, blockDims.y));
-  const dim3 gridDims(1, 1);
+  // TODO: determine gridDims
+  // Note @mbeck: should be dynamically allocated.
+  // At first parallelize across batchSize and numHeads.
+  // If more streaming multiprocessors available, parallelize across seqLen.
+  //! NOTE: for now we only parallelize across batchSize and numHeads
+  // TODO Need to dynamically check how many blocks we can launch
+  // TODO add check if batchSize*numHeads exceeds max gridDim.x
+
+  const dim3 gridDims(batchSize * numHeads, 2);
+  // const dim3 gridDims(1, 1);
   printf("blocksxy: %d-%d, threads: %d-%d\n", gridDims.x, gridDims.y,
          blockDims.x, blockDims.y);
 
   // TODO calculate dynamic shared memory size
 
-  cudaSetDevice(0);
+  // cudaSetDevice(0);
 
   cudaStream_t stream;
   cudaStreamCreate(&stream);
