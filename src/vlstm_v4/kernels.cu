@@ -43,8 +43,9 @@ __global__ void qkvkernel(scalar_t *matC, scalar_t *matQ, scalar_t *matK,
   64 // HD_SIZE: size of the allocated shared memory for the hidden dim
 
 #define DEBUG 1
-// #define DEBUG2 1
+#define DEBUG2 1
 // #define DEBUG3 1
+#define DEBUG4 1
 
 /**
 Conventions:
@@ -71,6 +72,13 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
   }
 #endif
 
+#ifdef DEBUG
+  if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+      (threadIdx.y == 0)) {
+    printf("In Kernel: QtileDim: %d, KVtileDim: %d, TblockDim:%d\n", QtileDim,
+           KVtileDim, TblockDim);
+  }
+#endif
   cg::grid_group gridGroup = cg::this_grid();
 
   // Assign threads to x-y-coordinates for accessing shared memory tiles
@@ -89,24 +97,25 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
     // Ends for looplevel 1&2:
     const uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
     const uint kvTileEnd = CEIL_DIV(seqLen, KVtileDim);
-#ifdef DEBUG
-    if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
-        (threadIdx.y == 0)) {
-      printf("In Kernel: QtileDim: %d, KVtileDim: %d, TblockDim:%d\n", QtileDim,
-             KVtileDim, TblockDim);
-      printf("In Kernel: qTileEnd: %d, kvTileEnd: %d\n", qTileEnd, kvTileEnd);
-    }
-#endif
-    // TODO looplevel 0: parallelize along gridDim.y
+    // TODO add looplevel 0: parallelize along gridDim.y
     // looplevel 1: loop over Qtile blocks along seqLen dim
     // Note: qTileIdx does not index into global memory
     for (uint qTileIdx = 0; qTileIdx < qTileEnd; ++qTileIdx) {
-
       // offset in Q matrix for qTile (global memory)
-      const uint qTileMemIdx =
-          batchHeadMemIdx +
-          (dimHeads * blockDim.y * gridDim.y) * qTileIdx * blockIdx.y;
+      const uint qTileGridGlobalMemIdx =
+          batchHeadMemIdx + (dimHeads * QtileDim * gridDim.y) * qTileIdx;
+      const uint qTileBlockGlobalMemIdx =
+          qTileGridGlobalMemIdx + dimHeads * blockDim.y * blockIdx.y;
 
+#ifdef DEBUG2
+      if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+          (threadIdx.y == 0)) {
+        printf("qTileIdx=%d: qTileEnd: %d, qTileGridGlobalMemIdx: %d, "
+               "qTileBlockGlobalMemIdx: %d\n",
+               qTileIdx, qTileEnd, qTileGridGlobalMemIdx,
+               qTileBlockGlobalMemIdx);
+      }
+#endif
       //! qTile Loading
       // init qTile in shared memory
       // TODO use dynamic shared memory!
@@ -118,9 +127,16 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
       const uint qWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
       const uint qWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
       for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
-           qWarpTileYIdx += blockDim.y) {
+           ++qWarpTileYIdx) {
+#ifdef DEBUG2
+        if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+            (threadIdx.y == 0)) {
+          printf("qWarpTileYIdx=%d: qWarpTileYEnd: %d, qWarpTileXEnd: %d\n",
+                 qWarpTileYIdx, qWarpTileYEnd, qWarpTileXEnd);
+        }
+#endif
         for (uint qWarpTileXIdx = 0; qWarpTileXIdx < qWarpTileXEnd;
-             qWarpTileXIdx += blockDim.x) {
+             ++qWarpTileXIdx) {
           //? qWarpTileIdxes
           //* shared memory:
           const uint qWarpTileThreadSharedMemYIdx =
@@ -130,129 +146,171 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
           //* global memory:
           // left upper corner of qTileBlock in Q (global memory)
           const uint qWarpTileBlockGlobalMemIdx =
-              qTileMemIdx + (dimHeads * blockDim.y) * qWarpTileYIdx +
+              qTileBlockGlobalMemIdx + (dimHeads * blockDim.y) * qWarpTileYIdx +
               blockDim.x * qWarpTileXIdx;
           const uint qWarpTileThreadGlobalMemIdx =
               qWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
 
           qTile[qWarpTileThreadSharedMemYIdx][qWarpTileThreadSharedMemXIdx] =
               matQ[qWarpTileThreadGlobalMemIdx];
+
+#ifdef DEBUG3
+          if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+              (threadIdx.y == 0)) {
+            printf("qTile[%d][%d] = %f\n", qWarpTileThreadSharedMemYIdx,
+                   qWarpTileThreadSharedMemXIdx,
+                   type2float(qTile[qWarpTileThreadSharedMemYIdx]
+                                   [qWarpTileThreadSharedMemXIdx]));
+          }
+#endif
+        }
+      }
+      __syncthreads();
+      //! DEBUG:
+      __shared__ scalar_t kTile[KVtileDim][HD_SIZE];
+      __shared__ scalar_t vTile[KVtileDim][HD_SIZE];
+
+      // looplevel 2: loop over KVtile blocks along seqLen dim
+      for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
+
+        // offset in K&V matrix for kTile & vTile (global memory)
+        const uint kvTileBlockGlobalMemIdx =
+            batchHeadMemIdx + (dimHeads * KVtileDim) * kvTileIdx;
+
+        //! kTile & vTile Loading
+        // init kTile and vTile in shared memory
+        // TODO use dynamic shared memory!
+        // __shared__ scalar_t kTile[KVtileDim][HD_SIZE];
+        // __shared__ scalar_t vTile[KVtileDim][HD_SIZE];
+
+        // loops over rows (outer) and columns (inner) of kTile & vTile
+        const uint kvWarpTileYEnd = CEIL_DIV(KVtileDim, blockDim.y);
+        const uint kvWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
+        for (uint kvWarpTileYIdx = 0; kvWarpTileYIdx < kvWarpTileYEnd;
+             ++kvWarpTileYIdx) {
+#ifdef DEBUG2
+          if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+              (threadIdx.y == 0)) {
+            printf(
+                "kvWarpTileYIdx=%d: kvWarpTileYEnd: %d, kvWarpTileXEnd: %d\n",
+                kvWarpTileYIdx, kvWarpTileYEnd, kvWarpTileXEnd);
+          }
+#endif
+          for (uint kvWarpTileXIdx = 0; kvWarpTileXIdx < kvWarpTileXEnd;
+               ++kvWarpTileXIdx) {
+            //? kvWarpTileIdxes
+            //* shared memory:
+            const uint kvWarpTileThreadSharedMemYIdx =
+                blockDim.y * kvWarpTileYIdx + threadIdx.y;
+            const uint kvWarpTileThreadSharedMemXIdx =
+                blockDim.x * kvWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            // left upper corner of kTileBlock in K (global memory)
+            const uint kvWarpTileBlockGlobalMemIdx =
+                kvTileBlockGlobalMemIdx +
+                (dimHeads * blockDim.y) * kvWarpTileYIdx +
+                blockDim.x * kvWarpTileXIdx;
+            const uint kvWarpTileThreadGlobalMemIdx =
+                kvWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
+                threadIdx.x;
+
+            kTile[kvWarpTileThreadSharedMemYIdx]
+                 [kvWarpTileThreadSharedMemXIdx] =
+                     matK[kvWarpTileThreadGlobalMemIdx];
+            vTile[kvWarpTileThreadSharedMemYIdx]
+                 [kvWarpTileThreadSharedMemXIdx] =
+                     matV[kvWarpTileThreadGlobalMemIdx];
+          }
         }
         __syncthreads();
 
-        // looplevel 2: loop over KVtile blocks along seqLen dim
-        for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
+        //! compute S = Q x K^T, i.e. fill sTile
+        // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
 
-          // offset in K&V matrix for kTile & vTile (global memory)
-          const uint kvTileMemIdx =
-              batchHeadMemIdx +
-              (dimHeads * blockDim.y * gridDim.y) * kvTileIdx * blockIdx.y;
+        // init sTile (QtileDim x KVTileDim) in shared memory for intermediate
+        // result of QK^T
+        __shared__ scalar_t sTile[QtileDim][KVtileDim];
 
-          //! kTile & vTile Loading
-          // init kTile and vTile in shared memory
-          // TODO use dynamic shared memory!
-          __shared__ scalar_t kTile[KVtileDim][HD_SIZE];
-          __shared__ scalar_t vTile[KVtileDim][HD_SIZE];
+        // loops over sTile rows (outer) and columns (inner)
+        const uint sTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint sTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint sTileYIdx = 0; sTileYIdx < sTileYEnd; ++sTileYIdx) {
+          for (uint sTileXIdx = 0; sTileXIdx < sTileXEnd; ++sTileXIdx) {
+            //? sTileIdxes
+            //* shared memory:
+            const uint sTileThreadSharedMemYIdx =
+                blockDim.y * sTileYIdx + threadIdx.y;
+            const uint sTileThreadSharedMemXIdx =
+                blockDim.x * sTileXIdx + threadIdx.x;
 
-          // loops over rows (outer) and columns (inner) of kTile & vTile
-          const uint kvWarpTileYEnd = CEIL_DIV(KVtileDim, blockDim.y);
-          const uint kvWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
-          for (uint kvWarpTileYIdx = 0; kvWarpTileYIdx < kvWarpTileYEnd;
-               kvWarpTileYIdx += blockDim.y) {
-            for (uint kvWarpTileXIdx = 0; kvWarpTileXIdx < kvWarpTileXEnd;
-                 kvWarpTileXIdx += blockDim.x) {
-              //? kvWarpTileIdxes
-              //* shared memory:
-              const uint kvWarpTileThreadSharedMemYIdx =
-                  blockDim.y * kvWarpTileYIdx + threadIdx.y;
-              const uint kvWarpTileThreadSharedMemXIdx =
-                  blockDim.x * kvWarpTileXIdx + threadIdx.x;
-              //* global memory:
-              // left upper corner of kTileBlock in K (global memory)
-              const uint kvWarpTileBlockGlobalMemIdx =
-                  kvTileMemIdx + (dimHeads * blockDim.y) * kvWarpTileYIdx +
-                  blockDim.x * kvWarpTileXIdx;
-              const uint kvWarpTileThreadGlobalMemIdx =
-                  kvWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
-                  threadIdx.x;
-
-              kTile[kvWarpTileThreadSharedMemYIdx]
-                   [kvWarpTileThreadSharedMemXIdx] =
-                       matK[kvWarpTileThreadGlobalMemIdx];
-              vTile[kvWarpTileThreadSharedMemYIdx]
-                   [kvWarpTileThreadSharedMemXIdx] =
-                       matV[kvWarpTileThreadGlobalMemIdx];
+            scalar_t qk_acc = dscalar_zero<scalar_t>();
+            for (uint i = 0; i < dimHeads; ++i) {
+              qk_acc = add_g(qk_acc, mul_g(qTile[sTileThreadSharedMemYIdx][i],
+                                           kTile[sTileThreadSharedMemXIdx][i]));
             }
+            sTile[sTileThreadSharedMemYIdx][sTileThreadSharedMemXIdx] = qk_acc;
+            __syncthreads();
           }
-          __syncthreads();
+        }
 
-          //! compute S = Q x K^T, i.e. fill sTile
-          // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
+        //! compute C += S * V, i.e. fill cTile
+        //! accumulate KVtiles to cTile
+        // (QtileDim,dimHeads) = (QtileDim,KVtileDim) x (KVtileDim,dimHeads)
 
-          // init sTile (QtileDim x KVTileDim) in shared memory for intermediate
-          // result of QK^T
-          __shared__ scalar_t sTile[QtileDim][KVtileDim];
+        // loops over cTile rows (outer) and columns (inner)
+        const uint cTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
+        for (uint cTileYIdx = 0; cTileYIdx < cTileYEnd; ++cTileYIdx) {
+          for (uint cTileXIdx = 0; cTileXIdx < cTileXEnd; ++cTileXIdx) {
 
-          // loops over sTile rows (outer) and columns (inner)
-          const uint sTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-          const uint sTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
-          for (uint sTileYIdx = 0; sTileYIdx < sTileYEnd; ++sTileYIdx) {
-            for (uint sTileXIdx = 0; sTileXIdx < sTileXEnd; ++sTileXIdx) {
-              //? sTileIdxes
-              //* shared memory:
-              const uint sTileThreadSharedMemYIdx =
-                  blockDim.y * sTileYIdx + threadIdx.y;
-              const uint sTileThreadSharedMemXIdx =
-                  blockDim.x * sTileXIdx + threadIdx.x;
+            //? cTileIdxes
+            //* shared memory:
+            const uint cTileThreadSharedMemYIdx =
+                blockDim.y * cTileYIdx + threadIdx.y;
+            const uint cTileThreadSharedMemXIdx =
+                blockDim.x * cTileXIdx + threadIdx.x;
 
-              scalar_t qk_acc = dscalar_zero<scalar_t>();
-              for (uint i = 0; i < dimHeads; ++i) {
-                qk_acc =
-                    add_g(qk_acc, mul_g(qTile[sTileThreadSharedMemYIdx][i],
-                                        kTile[sTileThreadSharedMemXIdx][i]));
-              }
-              sTile[sTileThreadSharedMemYIdx][sTileThreadSharedMemXIdx] =
-                  qk_acc;
-              __syncthreads();
+            scalar_t sv_acc = dscalar_zero<scalar_t>();
+            for (uint i = 0; i < KVtileDim; ++i) {
+              sv_acc = add_g(sv_acc, mul_g(sTile[cTileThreadSharedMemYIdx][i],
+                                           vTile[i][cTileThreadSharedMemXIdx]));
             }
-          }
-
-          //! compute C += S * V, i.e. fill cTile
-          //! accumulate KVtiles to cTile
-          // (QtileDim,dimHeads) = (QtileDim,KVtileDim) x (KVtileDim,dimHeads)
-
-          // loops over cTile rows (outer) and columns (inner)
-          const uint cTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-          const uint cTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
-          for (uint cTileYIdx = 0; cTileYIdx < cTileYEnd; ++cTileYIdx) {
-            for (uint cTileXIdx = 0; cTileXIdx < cTileXEnd; ++cTileXIdx) {
-
-              //? cTileIdxes
-              //* shared memory:
-              const uint cTileThreadSharedMemYIdx =
-                  blockDim.y * cTileYIdx + threadIdx.y;
-              const uint cTileThreadSharedMemXIdx =
-                  blockDim.x * cTileXIdx + threadIdx.x;
-
-              scalar_t sv_acc = dscalar_zero<scalar_t>();
-              for (uint i = 0; i < KVtileDim; ++i) {
-                sv_acc =
-                    add_g(sv_acc, mul_g(sTile[cTileThreadSharedMemYIdx][i],
-                                        vTile[i][cTileThreadSharedMemXIdx]));
-              }
-              // accumulate over all KVtiles
-              cTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx] = add_g(
-                  cTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx],
-                  sv_acc);
-              __syncthreads();
-            }
+            // accumulate over all KVtiles
+            cTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx] =
+                add_g(cTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx],
+                      sv_acc);
+            __syncthreads();
           }
         }
       }
 
       //! write cTile to global memory (has the same memory index as qTile)
-      // TODO: from here
-      // matC[qcTileThreadMemIdx] = c_acc;
+      // loops over cTile rows (outer) and columns (inner)
+      const uint cTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+      const uint cTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
+      for (uint cTileYIdx = 0; cTileYIdx < cTileYEnd; ++cTileYIdx) {
+        for (uint cTileXIdx = 0; cTileXIdx < cTileXEnd; ++cTileXIdx) {
+
+          //? cTileIdxes
+          //* shared memory:
+          const uint cTileThreadSharedMemYIdx =
+              blockDim.y * cTileYIdx + threadIdx.y;
+          const uint cTileThreadSharedMemXIdx =
+              blockDim.x * cTileXIdx + threadIdx.x;
+          //* global memory:
+          // left upper corner of cTileBlock in C (global memory)
+          const uint cTileBlockGlobalMemIdx =
+              qTileBlockGlobalMemIdx + (dimHeads * blockDim.y) * cTileYIdx +
+              blockDim.x * cTileXIdx;
+          const uint cTileThreadGlobalMemIdx =
+              cTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
+
+          // matC[cTileThreadGlobalMemIdx] =
+          //     cTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx];
+          matC[cTileThreadGlobalMemIdx] =
+              vTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx];
+        }
+      }
       __syncthreads();
     }
   }
