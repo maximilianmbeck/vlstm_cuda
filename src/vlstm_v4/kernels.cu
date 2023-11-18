@@ -245,11 +245,13 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
             const uint sWarpTileThreadSharedMemXIdx =
                 blockDim.x * sWarpTileXIdx + threadIdx.x;
 
-            scalar_t qk_acc = dscalar_zero<scalar_t>();
+            // scalar_t qk_acc = dscalar_zero<scalar_t>();
+            float qk_acc = 0.0f;
             for (uint i = 0; i < dimHeads; ++i) {
-              qk_acc =
-                  add_g(qk_acc, mul_g(qTile[sWarpTileThreadSharedMemYIdx][i],
-                                      kTile[sWarpTileThreadSharedMemXIdx][i]));
+              qk_acc = add_g(
+                  qk_acc,
+                  type2float(mul_g(qTile[sWarpTileThreadSharedMemYIdx][i],
+                                   kTile[sWarpTileThreadSharedMemXIdx][i])));
 #ifdef DEBUG4
               if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
                   (threadIdx.x == 0) && (threadIdx.y == 3) &&
@@ -268,7 +270,7 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
 #endif
             }
             sTile[sWarpTileThreadSharedMemYIdx][sWarpTileThreadSharedMemXIdx] =
-                qk_acc;
+                float2type<scalar_t>(qk_acc);
             __syncthreads();
           }
         }
@@ -292,17 +294,19 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
             const uint cWarpTileThreadSharedMemXIdx =
                 blockDim.x * cWarpTileXIdx + threadIdx.x;
 
-            scalar_t sv_acc = dscalar_zero<scalar_t>();
+            // scalar_t sv_acc = dscalar_zero<scalar_t>();
+            float sv_acc = 0.0f;
             for (uint i = 0; i < KVtileDim; ++i) {
-              sv_acc =
-                  add_g(sv_acc, mul_g(sTile[cWarpTileThreadSharedMemYIdx][i],
-                                      vTile[i][cWarpTileThreadSharedMemXIdx]));
+              sv_acc = add_g(
+                  sv_acc,
+                  type2float(mul_g(sTile[cWarpTileThreadSharedMemYIdx][i],
+                                   vTile[i][cWarpTileThreadSharedMemXIdx])));
             }
             // accumulate over all KVtiles
             cTile[cWarpTileThreadSharedMemYIdx][cWarpTileThreadSharedMemXIdx] =
                 add_g(cTile[cWarpTileThreadSharedMemYIdx]
                            [cWarpTileThreadSharedMemXIdx],
-                      sv_acc);
+                      float2type<scalar_t>(sv_acc));
             __syncthreads();
           }
         }
