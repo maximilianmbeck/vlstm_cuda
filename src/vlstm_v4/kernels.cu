@@ -420,5 +420,8 @@ template void kernel_dispatchers::qkvkernel_dispatch<__nv_bfloat16>(
 template void kernel_dispatchers::qkvkernel_dispatch<__half>(
     __half *matC, __half *matQ, __half *matK, __half *matV, int batchSize,
     int numHeads, int seqLen, int dimHeads);
+template void kernel_dispatchers::qkvkernel_dispatch<float>(
+    float *matC, float *matQ, float *matK, float *matV, int batchSize,
+    int numHeads, int seqLen, int dimHeads);
 
 } // namespace vlstm

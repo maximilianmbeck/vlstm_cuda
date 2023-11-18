@@ -53,7 +53,14 @@ Tensor interface::qkvkernel(Tensor matQ, Tensor matK, Tensor matV) {
               reinterpret_cast<__half *>(matK.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matV.data_ptr<scalar_t>()), batchSize,
               numHeads, seqLen, dimHeads);
-
+        } else if (std::is_same<scalar_t, float>::value) {
+          printf("before kernel dispatch - float32!\n");
+          kernel_dispatchers::qkvkernel_dispatch<float>(
+              reinterpret_cast<float *>(matC.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(matQ.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(matK.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(matV.data_ptr<scalar_t>()), batchSize,
+              numHeads, seqLen, dimHeads);
         } else {
           printf("No kernel for this dtype available.\n");
         }
