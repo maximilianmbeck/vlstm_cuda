@@ -232,38 +232,43 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
         __shared__ scalar_t sTile[QtileDim][KVtileDim];
 
         // loops over sTile rows (outer) and columns (inner)
-        const uint sTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-        const uint sTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
-        for (uint sTileYIdx = 0; sTileYIdx < sTileYEnd; ++sTileYIdx) {
-          for (uint sTileXIdx = 0; sTileXIdx < sTileXEnd; ++sTileXIdx) {
+        const uint sWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint sWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint sWarpTileYIdx = 0; sWarpTileYIdx < sWarpTileYEnd;
+             ++sWarpTileYIdx) {
+          for (uint sWarpTileXIdx = 0; sWarpTileXIdx < sWarpTileXEnd;
+               ++sWarpTileXIdx) {
             //? sTileIdxes
             //* shared memory:
-            const uint sTileThreadSharedMemYIdx =
-                blockDim.y * sTileYIdx + threadIdx.y;
-            const uint sTileThreadSharedMemXIdx =
-                blockDim.x * sTileXIdx + threadIdx.x;
+            const uint sWarpTileThreadSharedMemYIdx =
+                blockDim.y * sWarpTileYIdx + threadIdx.y;
+            const uint sWarpTileThreadSharedMemXIdx =
+                blockDim.x * sWarpTileXIdx + threadIdx.x;
 
             scalar_t qk_acc = dscalar_zero<scalar_t>();
             for (uint i = 0; i < dimHeads; ++i) {
-              qk_acc = add_g(qk_acc, mul_g(qTile[sTileThreadSharedMemYIdx][i],
-                                           kTile[sTileThreadSharedMemXIdx][i]));
+              qk_acc =
+                  add_g(qk_acc, mul_g(qTile[sWarpTileThreadSharedMemYIdx][i],
+                                      kTile[sWarpTileThreadSharedMemXIdx][i]));
 #ifdef DEBUG4
               if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
                   (threadIdx.x == 0) && (threadIdx.y == 3) &&
-                  (sTileXIdx == 0) && (kvTileIdx == 0) && (i == dimHeads - 1)) {
+                  (sWarpTileXIdx == 0) && (kvTileIdx == 0) &&
+                  (i == dimHeads - 1)) {
                 printf("qTIdx=%d|kvTIdx=%d: qTile[%d][%d] = %f\n", qTileIdx,
-                       kvTileIdx, sTileThreadSharedMemYIdx, i,
-                       type2float(qTile[sTileThreadSharedMemYIdx][i]));
+                       kvTileIdx, sWarpTileThreadSharedMemYIdx, i,
+                       type2float(qTile[sWarpTileThreadSharedMemYIdx][i]));
                 printf("qTIdx=%d|kvTIdx=%d: kTile[%d][%d] = %f\n", qTileIdx,
-                       kvTileIdx, sTileThreadSharedMemXIdx, i,
-                       type2float(kTile[sTileThreadSharedMemXIdx][i]));
+                       kvTileIdx, sWarpTileThreadSharedMemXIdx, i,
+                       type2float(kTile[sWarpTileThreadSharedMemXIdx][i]));
                 printf("qTIdx=%d|kvTIdx=%d: sTile[%d][%d](%d) = %f\n", qTileIdx,
-                       kvTileIdx, sTileThreadSharedMemYIdx,
-                       sTileThreadSharedMemXIdx, i, type2float(qk_acc));
+                       kvTileIdx, sWarpTileThreadSharedMemYIdx,
+                       sWarpTileThreadSharedMemXIdx, i, type2float(qk_acc));
               }
 #endif
             }
-            sTile[sTileThreadSharedMemYIdx][sTileThreadSharedMemXIdx] = qk_acc;
+            sTile[sWarpTileThreadSharedMemYIdx][sWarpTileThreadSharedMemXIdx] =
+                qk_acc;
             __syncthreads();
           }
         }
@@ -273,10 +278,10 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
         // (QtileDim,dimHeads) = (QtileDim,KVtileDim) x (KVtileDim,dimHeads)
 
         // loops over cTile rows (outer) and columns (inner)
-        const uint cTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-        const uint cTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
-        for (uint cTileYIdx = 0; cTileYIdx < cTileYEnd; ++cTileYIdx) {
-          for (uint cTileXIdx = 0; cTileXIdx < cTileXEnd; ++cTileXIdx) {
+        const uint cWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
+        for (uint cTileYIdx = 0; cTileYIdx < cWarpTileYEnd; ++cTileYIdx) {
+          for (uint cTileXIdx = 0; cTileXIdx < cWarpTileXEnd; ++cTileXIdx) {
 
             //? cTileIdxes
             //* shared memory:
