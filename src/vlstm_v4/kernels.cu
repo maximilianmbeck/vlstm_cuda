@@ -43,7 +43,7 @@ __global__ void qkvkernel(scalar_t *matC, scalar_t *matQ, scalar_t *matK,
   64 // HD_SIZE: size of the allocated shared memory for the hidden dim
 
 #define DEBUG 1
-#define DEBUG2 1
+// #define DEBUG2 1
 // #define DEBUG3 1
 #define DEBUG4 1
 
@@ -247,6 +247,21 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
             for (uint i = 0; i < dimHeads; ++i) {
               qk_acc = add_g(qk_acc, mul_g(qTile[sTileThreadSharedMemYIdx][i],
                                            kTile[sTileThreadSharedMemXIdx][i]));
+#ifdef DEBUG4
+              if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                  (threadIdx.x == 0) && (threadIdx.y == 3) &&
+                  (sTileXIdx == 0) && (kvTileIdx == 0) && (i == dimHeads - 1)) {
+                printf("qTIdx=%d|kvTIdx=%d: qTile[%d][%d] = %f\n", qTileIdx,
+                       kvTileIdx, sTileThreadSharedMemYIdx, i,
+                       type2float(qTile[sTileThreadSharedMemYIdx][i]));
+                printf("qTIdx=%d|kvTIdx=%d: kTile[%d][%d] = %f\n", qTileIdx,
+                       kvTileIdx, sTileThreadSharedMemXIdx, i,
+                       type2float(kTile[sTileThreadSharedMemXIdx][i]));
+                printf("qTIdx=%d|kvTIdx=%d: sTile[%d][%d](%d) = %f\n", qTileIdx,
+                       kvTileIdx, sTileThreadSharedMemYIdx,
+                       sTileThreadSharedMemXIdx, i, type2float(qk_acc));
+              }
+#endif
             }
             sTile[sTileThreadSharedMemYIdx][sTileThreadSharedMemXIdx] = qk_acc;
             __syncthreads();
@@ -305,10 +320,10 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
           const uint cTileThreadGlobalMemIdx =
               cTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
 
-          // matC[cTileThreadGlobalMemIdx] =
-          //     cTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx];
           matC[cTileThreadGlobalMemIdx] =
-              vTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx];
+              cTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx];
+          // matC[cTileThreadGlobalMemIdx] =
+          //     kTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx];
         }
       }
       __syncthreads();
