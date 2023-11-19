@@ -15,13 +15,19 @@ class CppModule(object):
     def instance(cls):
         if cls.module is None:
             cls.module = load(
-                name="vlstm_v4",
+                name="qkv_v0",
                 sources=[str(filedir / "interface.cc"), str(filedir / "kernels.cu")],
             )
         return cls.module
 
 
 cppmodule = CppModule.instance()
+
+
+def mmkernelv1(mat_A: torch.Tensor, mat_B: torch.Tensor) -> torch.Tensor:
+    out = cppmodule.mmkernelv1(mat_A, mat_B)
+
+    return out
 
 
 def qkvkernel(
