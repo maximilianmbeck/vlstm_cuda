@@ -38,10 +38,6 @@ __global__ void qkvkernel(scalar_t *matC, scalar_t *matQ, scalar_t *matK,
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM
 #define QTILE_DIM 8 // QtileDim: TileDim for Q along seqLen dim
 
-// TODO use dynamic shared memory!
-#define HD_SIZE                                                                \
-  64 // HD_SIZE: size of the allocated shared memory for the hidden dim
-
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
 #define SHARED_MEM_PADDING 8 // SHARED_MEM_PADDING: padding for shared memory
@@ -400,10 +396,6 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
   // kernel asserts
   if ((seqLen % QtileDim != 0) || (seqLen % KVtileDim != 0)) {
     printf("seqLen must be divisible by QblockDim and KVblockDim\n");
-  }
-
-  if (dimHeads >= HD_SIZE) {
-    fprintf(stderr, "dimHeads must be smaller than HD_SIZE\n");
   }
 
   // determine the number of blocks and threads
