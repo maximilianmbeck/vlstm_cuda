@@ -42,11 +42,19 @@ __global__ void qkvkernel(scalar_t *matC, scalar_t *matQ, scalar_t *matK,
 #define HD_SIZE                                                                \
   64 // HD_SIZE: size of the allocated shared memory for the hidden dim
 
+// shared memory must be aligned: depends on scalar_t (multiples of 4 should be
+// fine for bf16, fp16 and fp32)
+#define SHARED_MEM_PADDING 8 // SHARED_MEM_PADDING: padding for shared memory
+
+// SMEMARRAY: access shared memory array
+#define SMEMARRAY(array, stride, row, col)                                     \
+  array[(row) * (stride + SHARED_MEM_PADDING) + (col)]
+
 #define DEBUG 1
 // #define DEBUG2 1
 // #define DEBUG3 1
 // #define DEBUG4 1
-#define DEBUG5 1
+// #define DEBUG5 1
 
 /**
 Conventions:
@@ -83,18 +91,25 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
   //! Shared Memory aka SRAM
   // the data in this shared memory is shared across all threads in a thread
   // block
+  extern __shared__ float sbuf[]; // declare it as float and redefine it later
+
   //? for inputs
-  // TODO use dynamic shared memory!
-  // init qTile, kTile and vTile in shared memory
-  __shared__ scalar_t qTile[QtileDim][HD_SIZE];
-  __shared__ scalar_t kTile[KVtileDim][HD_SIZE];
-  __shared__ scalar_t vTile[KVtileDim][HD_SIZE];
+  // qtile (QtileDim x dimHeads) in shared memory (padding for alignment)
+  scalar_t *qTile = (scalar_t *)sbuf;
+  // kTile and vTile (KVtileDim x dimHeads) in shared memory
+  scalar_t *kTile =
+      (scalar_t *)&qTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
+  scalar_t *vTile =
+      (scalar_t *)&kTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
+
   //? for intermediate results
   // init sTile (QtileDim x KVTileDim) in shared memory for intermediate
   // result of QK^T
-  __shared__ scalar_t sTile[QtileDim][KVtileDim];
-  // init result cTile in shared memory
-  __shared__ scalar_t cTile[QtileDim][HD_SIZE];
+  scalar_t *sTile =
+      (scalar_t *)&vTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
+  // init result cTile (QTileDim x dimHeads) in shared memory
+  scalar_t *cTile =
+      (scalar_t *)&sTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStep = seqLen * dimHeads;
@@ -177,7 +192,8 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
           const uint qWarpTileThreadGlobalMemIdx =
               qWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
 
-          qTile[qWarpTileThreadSharedMemYIdx][qWarpTileThreadSharedMemXIdx] =
+          SMEMARRAY(qTile, dimHeads, qWarpTileThreadSharedMemYIdx,
+                    qWarpTileThreadSharedMemXIdx) =
               matQ[qWarpTileThreadGlobalMemIdx];
 
 #ifdef DEBUG3
@@ -232,12 +248,12 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
                 kvWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
                 threadIdx.x;
 
-            kTile[kvWarpTileThreadSharedMemYIdx]
-                 [kvWarpTileThreadSharedMemXIdx] =
-                     matK[kvWarpTileThreadGlobalMemIdx];
-            vTile[kvWarpTileThreadSharedMemYIdx]
-                 [kvWarpTileThreadSharedMemXIdx] =
-                     matV[kvWarpTileThreadGlobalMemIdx];
+            SMEMARRAY(kTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
+                      kvWarpTileThreadSharedMemXIdx) =
+                matK[kvWarpTileThreadGlobalMemIdx];
+            SMEMARRAY(vTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
+                      kvWarpTileThreadSharedMemXIdx) =
+                matV[kvWarpTileThreadGlobalMemIdx];
           }
         }
         __syncthreads();
@@ -261,10 +277,12 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
             // scalar_t qk_acc = dscalar_zero<scalar_t>();
             float qk_acc = 0.0f;
             for (uint i = 0; i < dimHeads; ++i) {
-              qk_acc = add_g(
-                  qk_acc,
-                  type2float(mul_g(qTile[sWarpTileThreadSharedMemYIdx][i],
-                                   kTile[sWarpTileThreadSharedMemXIdx][i])));
+              qk_acc = add_g(qk_acc,
+                             type2float(mul_g(
+                                 SMEMARRAY(qTile, dimHeads,
+                                           sWarpTileThreadSharedMemYIdx, i),
+                                 SMEMARRAY(kTile, dimHeads,
+                                           sWarpTileThreadSharedMemXIdx, i))));
 #ifdef DEBUG4
               if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
                   (threadIdx.x == 0) && (threadIdx.y == 3) &&
@@ -282,7 +300,8 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
               }
 #endif
             }
-            sTile[sWarpTileThreadSharedMemYIdx][sWarpTileThreadSharedMemXIdx] =
+            SMEMARRAY(sTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
+                      sWarpTileThreadSharedMemXIdx) =
                 float2type<scalar_t>(qk_acc);
             __syncthreads();
           }
@@ -311,21 +330,23 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
             for (uint i = 0; i < KVtileDim; ++i) {
               sv_acc = add_g(
                   sv_acc,
-                  type2float(mul_g(sTile[cWarpTileThreadSharedMemYIdx][i],
-                                   vTile[i][cWarpTileThreadSharedMemXIdx])));
+                  type2float(mul_g(SMEMARRAY(sTile, KVtileDim,
+                                             cWarpTileThreadSharedMemYIdx, i),
+                                   SMEMARRAY(vTile, dimHeads, i,
+                                             cWarpTileThreadSharedMemXIdx))));
             }
             // accumulate over all KVtiles
             if (kvTileIdx == 0) {
               // we need to clear the cTile in first iteration
-              cTile[cWarpTileThreadSharedMemYIdx]
-                   [cWarpTileThreadSharedMemXIdx] =
-                       float2type<scalar_t>(sv_acc);
+              SMEMARRAY(cTile, dimHeads, cWarpTileThreadSharedMemYIdx,
+                        cWarpTileThreadSharedMemXIdx) =
+                  float2type<scalar_t>(sv_acc);
             } else {
-              cTile[cWarpTileThreadSharedMemYIdx]
-                   [cWarpTileThreadSharedMemXIdx] =
-                       add_g(cTile[cWarpTileThreadSharedMemYIdx]
-                                  [cWarpTileThreadSharedMemXIdx],
-                             float2type<scalar_t>(sv_acc));
+              SMEMARRAY(cTile, dimHeads, cWarpTileThreadSharedMemYIdx,
+                        cWarpTileThreadSharedMemXIdx) =
+                  add_g(SMEMARRAY(cTile, dimHeads, cWarpTileThreadSharedMemYIdx,
+                                  cWarpTileThreadSharedMemXIdx),
+                        float2type<scalar_t>(sv_acc));
             }
             __syncthreads();
           }
@@ -356,9 +377,8 @@ __global__ void kernels::qkvkernel(scalar_t *matC, scalar_t *matQ,
               cWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
 
           matC[cWarpTileThreadGlobalMemIdx] =
-              cTile[cWarpTileThreadSharedMemYIdx][cWarpTileThreadSharedMemXIdx];
-          // matC[cTileThreadGlobalMemIdx] =
-          //     kTile[cTileThreadSharedMemYIdx][cTileThreadSharedMemXIdx];
+              SMEMARRAY(cTile, dimHeads, cWarpTileThreadSharedMemYIdx,
+                        cWarpTileThreadSharedMemXIdx);
         }
       }
       __syncthreads();
@@ -399,24 +419,35 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
 
   const dim3 gridDims(batchSize * numHeads, 2);
   // const dim3 gridDims(1, 1);
-  printf("blocksxy: %d-%d, threads: %d-%d\n", gridDims.x, gridDims.y,
-         blockDims.x, blockDims.y);
 
-  // TODO calculate dynamic shared memory size
+  //! calculate dynamic shared memory size
+  // TODO understand how memory padding works! Why at innermost dim?
+  // we are storing the following tiles in shared memory:
+  // - Input tiles: qTile, vTile, kTile -> (QtileDim, dimHeads +
+  // SHARED_MEM_PADDING)
+  // - Intermediate result tile: sTile -> (QtileDim, KVtileDim +
+  // SHARED_MEM_PADDING)
+  // - Output tile: cTile -> (QtileDim, dimHeads + SHARED_MEM_PADDING)
 
+  const uint qkvcTileSharedMemSize =
+      sizeof(scalar_t) * QtileDim * (dimHeads + SHARED_MEM_PADDING);
+  const uint sTileSharedMemSize =
+      sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
+
+  const uint sharedMemorySize = 4 * qkvcTileSharedMemSize + sTileSharedMemSize;
+
+  printf("blocksxy: %d-%d, threads: %d-%d, shared_mem in bytes: %d\n",
+         gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
   // cudaSetDevice(0);
 
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
   auto kernel = kernels::qkvkernel<scalar_t, TblockDim, QtileDim, KVtileDim>;
-  // cudaFuncSetAttribute(kernel,
-  // cudaFuncAttributePreferredSharedMemoryCarveout,
-  //                      cudaSharedmemCarveoutMaxShared);
-  // TODO dynamic shared memory
-  // cudaFuncSetAttribute(kernel,
-  // cudaFuncAttributeMaxDynamicSharedMemorySize,
-  //                      sharedMemorySize);
+  cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout,
+                       cudaSharedmemCarveoutMaxShared);
+  cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
+                       sharedMemorySize);
 
   // define void* pointers to the kernel arguments
   void *kernelArgs[] = {(void *)&matC,   (void *)&matQ,      (void *)&matK,
@@ -424,7 +455,7 @@ void kernel_dispatchers::qkvkernel_dispatch(scalar_t *matC, scalar_t *matQ,
                         (void *)&seqLen, (void *)&dimHeads};
 
   cudaLaunchCooperativeKernel((void *)kernel, gridDims, blockDims, kernelArgs,
-                              0, stream);
+                              sharedMemorySize, stream);
 
   // kernels::qkvkernel<scalar_t, TblockDim, QtileDim, KVtileDim>
   //     <<<gridDims, blockDims>>>(matC, matQ, matK, matV, batchSize,
