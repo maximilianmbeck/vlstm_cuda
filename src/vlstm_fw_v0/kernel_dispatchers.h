@@ -1,6 +1,7 @@
-#pragma once
+// Copyright JKU Linz 2023
+// Author: Maximilian Beck
 
-// #include <torch/extension.h>
+#pragma once
 
 namespace vlstm {
 

@@ -1,3 +1,6 @@
+# Copyright JKU Linz 2023
+# Author: Maximilian Beck
+
 import os
 from pathlib import Path
 
@@ -24,7 +27,10 @@ class CppModule(object):
 cppmodule = CppModule.instance()
 
 
-def vlstm_fw(
+from .torch_impl import vlstm_fw_torch
+
+
+def vlstm_fw_cuda(
     mat_Q: torch.Tensor, mat_K: torch.Tensor, mat_V: torch.Tensor
 ) -> torch.Tensor:
     mat_Q = mat_Q.contiguous()

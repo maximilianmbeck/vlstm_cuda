@@ -15,7 +15,6 @@ int main() {
   torch::Tensor tensor = torch::rand({2, 2}, options);
   std::cout << tensor << std::endl;
 
-
   printf("Calling copykernel:\n");
   torch::Tensor tensor2 = vlstm::interface::copykernel(tensor);
   std::cout << tensor2 << std::endl;

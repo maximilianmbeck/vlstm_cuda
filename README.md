@@ -23,4 +23,4 @@ It aims to show the progress of the different kernels.
 
 4. **Implement vLSTM forward pass without tensor cores**:
 
-- vlstm_fw_v0: Build on qkv_v1, integrate forget&input gates + normalization. Make normalization optional.
+- vlstm_fw_v0: Build on qkv_v1, integrate forget&input gates + normalization.

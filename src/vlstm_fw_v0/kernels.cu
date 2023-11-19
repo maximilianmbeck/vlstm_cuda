@@ -1,3 +1,6 @@
+// Copyright JKU Linz 2023
+// Author: Maximilian Beck
+
 #include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda.h>

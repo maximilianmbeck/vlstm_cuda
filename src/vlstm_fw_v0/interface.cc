@@ -1,3 +1,5 @@
+// Copyright JKU Linz 2023
+// Author: Maximilian Beck
 
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
