@@ -108,6 +108,10 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
   // init result hTile (QTileDim x dimHeads) in shared memory
   scalar_t *hTile =
       (scalar_t *)&cTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
+  // init dTile (QTileDim x KVTileDim) in shared memory for forget and input
+  // gate matrix
+  scalar_t *dTile =
+      (scalar_t *)&hTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStep = seqLen * dimHeads;
@@ -415,7 +419,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
   // const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size
-  // TODO understand how memory padding works! Why at innermost dim?
+  // TODO understand how memory padding works!
+  // Why at innermost dim? Because memory is organized consecutively
   // we are storing the following tiles in shared memory:
   // - Input tiles: qTile, vTile, kTile -> (QtileDim, dimHeads +
   // SHARED_MEM_PADDING)
@@ -423,12 +428,13 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
   // SHARED_MEM_PADDING)
   // - Output tile: hTile -> (QtileDim, dimHeads + SHARED_MEM_PADDING)
 
-  const uint qkvcTileSharedMemSize =
+  const uint qkvhTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (dimHeads + SHARED_MEM_PADDING);
-  const uint sTileSharedMemSize =
+  const uint cdTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
 
-  const uint sharedMemorySize = 4 * qkvcTileSharedMemSize + sTileSharedMemSize;
+  const uint sharedMemorySize =
+      4 * qkvhTileSharedMemSize + 2 * cdTileSharedMemSize;
 
   printf("blocksxy: %d-%d, threads: %d-%d, shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
