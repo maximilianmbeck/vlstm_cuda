@@ -101,13 +101,13 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
       (scalar_t *)&kTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
 
   //? for intermediate results
-  // init sTile (QtileDim x KVTileDim) in shared memory for intermediate
+  // init cTile (QtileDim x KVTileDim) in shared memory for intermediate
   // result of QK^T
-  scalar_t *sTile =
-      (scalar_t *)&vTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
-  // init result cTile (QTileDim x dimHeads) in shared memory
   scalar_t *cTile =
-      (scalar_t *)&sTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
+      (scalar_t *)&vTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
+  // init result hTile (QTileDim x dimHeads) in shared memory
+  scalar_t *hTile =
+      (scalar_t *)&cTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStep = seqLen * dimHeads;
@@ -256,9 +256,9 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
         }
         __syncthreads();
 
-        //! compute S = Q x K^T, i.e. fill sTile
+        //! compute C = Q x K^T, i.e. fill cTile
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
-        // loops over sTile rows (outer) and columns (inner)
+        // loops over cTile rows (outer) and columns (inner)
         const uint sWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
         const uint sWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
         for (uint sWarpTileYIdx = 0; sWarpTileYIdx < sWarpTileYEnd;
@@ -292,23 +292,23 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
                 printf("qTIdx=%d|kvTIdx=%d: kTile[%d][%d] = %f\n", qTileIdx,
                        kvTileIdx, sWarpTileThreadSharedMemXIdx, i,
                        type2float(kTile[sWarpTileThreadSharedMemXIdx][i]));
-                printf("qTIdx=%d|kvTIdx=%d: sTile[%d][%d](%d) = %f\n", qTileIdx,
+                printf("qTIdx=%d|kvTIdx=%d: cTile[%d][%d](%d) = %f\n", qTileIdx,
                        kvTileIdx, sWarpTileThreadSharedMemYIdx,
                        sWarpTileThreadSharedMemXIdx, i, type2float(qk_acc));
               }
 #endif
             }
-            SMEMARRAY(sTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
+            SMEMARRAY(cTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
                       sWarpTileThreadSharedMemXIdx) =
                 float2type<scalar_t>(qk_acc);
             __syncthreads();
           }
         }
 
-        //! compute C += S * V, i.e. fill cTile
-        //! accumulate KVtiles to cTile
+        //! compute H += C * V, i.e. fill hTile
+        //! accumulate KVtiles to hTile
         // (QtileDim,dimHeads) = (QtileDim,KVtileDim) x (KVtileDim,dimHeads)
-        // loops over cTile rows (outer) and columns (inner)
+        // loops over hTile rows (outer) and columns (inner)
         const uint cWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
         const uint cWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
         for (uint cWarpTileYIdx = 0; cWarpTileYIdx < cWarpTileYEnd;
@@ -328,21 +328,21 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
             for (uint i = 0; i < KVtileDim; ++i) {
               sv_acc = add_g(
                   sv_acc,
-                  type2float(mul_g(SMEMARRAY(sTile, KVtileDim,
+                  type2float(mul_g(SMEMARRAY(cTile, KVtileDim,
                                              cWarpTileThreadSharedMemYIdx, i),
                                    SMEMARRAY(vTile, dimHeads, i,
                                              cWarpTileThreadSharedMemXIdx))));
             }
             // accumulate over all KVtiles
             if (kvTileIdx == 0) {
-              // we need to clear the cTile in first iteration
-              SMEMARRAY(cTile, dimHeads, cWarpTileThreadSharedMemYIdx,
+              // we need to clear the hTile in first iteration
+              SMEMARRAY(hTile, dimHeads, cWarpTileThreadSharedMemYIdx,
                         cWarpTileThreadSharedMemXIdx) =
                   float2type<scalar_t>(sv_acc);
             } else {
-              SMEMARRAY(cTile, dimHeads, cWarpTileThreadSharedMemYIdx,
+              SMEMARRAY(hTile, dimHeads, cWarpTileThreadSharedMemYIdx,
                         cWarpTileThreadSharedMemXIdx) =
-                  add_g(SMEMARRAY(cTile, dimHeads, cWarpTileThreadSharedMemYIdx,
+                  add_g(SMEMARRAY(hTile, dimHeads, cWarpTileThreadSharedMemYIdx,
                                   cWarpTileThreadSharedMemXIdx),
                         float2type<scalar_t>(sv_acc));
             }
@@ -351,8 +351,8 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
         }
       }
 
-      //! write cTile to global memory (has the same memory index as qTile)
-      // loops over cTile rows (outer) and columns (inner)
+      //! write hTile to global memory (has the same memory index as qTile)
+      // loops over hTile rows (outer) and columns (inner)
       const uint cWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
       const uint cWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
       for (uint cWarpTileYIdx = 0; cWarpTileYIdx < cWarpTileYEnd;
@@ -375,7 +375,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
               cWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
 
           matC[cWarpTileThreadGlobalMemIdx] =
-              SMEMARRAY(cTile, dimHeads, cWarpTileThreadSharedMemYIdx,
+              SMEMARRAY(hTile, dimHeads, cWarpTileThreadSharedMemYIdx,
                         cWarpTileThreadSharedMemXIdx);
         }
       }
@@ -419,9 +419,9 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
   // we are storing the following tiles in shared memory:
   // - Input tiles: qTile, vTile, kTile -> (QtileDim, dimHeads +
   // SHARED_MEM_PADDING)
-  // - Intermediate result tile: sTile -> (QtileDim, KVtileDim +
+  // - Intermediate result tile: cTile -> (QtileDim, KVtileDim +
   // SHARED_MEM_PADDING)
-  // - Output tile: cTile -> (QtileDim, dimHeads + SHARED_MEM_PADDING)
+  // - Output tile: hTile -> (QtileDim, dimHeads + SHARED_MEM_PADDING)
 
   const uint qkvcTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (dimHeads + SHARED_MEM_PADDING);
