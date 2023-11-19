@@ -14,7 +14,10 @@ class CppModule(object):
     @classmethod
     def instance(cls):
         if cls.module is None:
-            cls.module = load(name="vlstm_v2", sources=[str(filedir / "interface.cc"), str(filedir / "kernels.cu")])
+            cls.module = load(
+                name="mm_v1",
+                sources=[str(filedir / "interface.cc"), str(filedir / "kernels.cu")],
+            )
         return cls.module
 
 
