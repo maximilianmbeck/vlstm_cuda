@@ -14,7 +14,7 @@
         "editor.defaultFormatter": "ms-python.black-formatter",
         "editor.formatOnType": true,
         "editor.codeActionsOnSave": {
-            "source.organizeImports": true //true
+            "source.organizeImports": "explicit"
         }
     },
     "editor.formatOnSave": true, //true,

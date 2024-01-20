@@ -31,7 +31,6 @@ def vlstm_fw_torch(
         values (torch.Tensor): (B, NH, S, DH)
         igate_preact (torch.Tensor): (B, NH, S, 1)
         fgate_preact (torch.Tensor): (B, NH, S, 1)
-        lower_triangular_matrix (torch.Tensor, optional): (S,S). Defaults to None.
         stabilize_rowwise (bool, optional): Wether to stabilize the combination matrix C rowwise (take maximum per row).
             Alternative: Subtract the maximum over all rows. Defaults to True.
 

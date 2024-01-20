@@ -57,7 +57,7 @@ __global__ void vlstm_fw(scalar_t *matC, scalar_t *matQ, scalar_t *matK,
 
 /**
 Conventions:
-
+// TODO add conventions
 
 */
 
