@@ -19,6 +19,7 @@ def vlstm_fw_torch(
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
     stabilize_rowwise: bool = True,
+    eps: float = 1e-6,
     **kwargs,
 ) -> torch.Tensor:
     """This is the core linear hopfield retrieval operation in parallel form.
@@ -96,7 +97,7 @@ def vlstm_fw_torch(
         C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D)
     )  # (B, NH, S, 1)
     # (B, NH, S, S)
-    C_matrix_normalized = C_matrix / normalizer
+    C_matrix_normalized = C_matrix / (normalizer + eps)
 
     # retrieved values
     retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
