@@ -34,6 +34,7 @@ def vlstm_fw_cuda(
     mat_Q: torch.Tensor, mat_K: torch.Tensor, mat_V: torch.Tensor
 ) -> torch.Tensor:
     mat_Q = mat_Q.contiguous()
+    # TODO @max I guess this comment is not valid anymore
     # transpose K matrix in order to have coalesced access in the kernel
     # Could do this also on C++ side
     mat_K = mat_K.contiguous()

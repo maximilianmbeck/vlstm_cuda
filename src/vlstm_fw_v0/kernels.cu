@@ -61,7 +61,7 @@ Conventions:
 
 */
 
-/* QKV Kernel v1 */
+/* vLSTM Forward Kernel v0 */
 
 template <typename scalar_t, int TblockDim, int QtileDim, int KVtileDim>
 __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
@@ -92,6 +92,11 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
   extern __shared__ float sbuf[]; // declare it as float and redefine it later
 
   //? for inputs
+  // Note: keep in mind the memory is defined in a contiguous region.
+  // One pointer has the full memory space until the next point is defined.
+  // Therefore to read the size of a single shared memory array you need to
+  // have a look at the offset for the next array.
+
   // qtile (QtileDim x dimHeads) in shared memory (padding for alignment)
   scalar_t *qTile = (scalar_t *)sbuf;
   // kTile and vTile (KVtileDim x dimHeads) in shared memory
@@ -116,7 +121,9 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStep = seqLen * dimHeads;
   const uint numBatchHeads = batchSize * numHeads;
+  // End for looplevel 0:
   const uint batchHeadEnd = CEIL_DIV(numBatchHeads, gridDim.x);
+  // looplevel 0: loop over batches and heads
   for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd; ++batchHeadIdx) {
 
     uint batchHeadGridXGlobalMemIdx =
@@ -209,7 +216,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
 #endif
         }
       }
-      __syncthreads();
+      __syncthreads(); // TODO: necessary?
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
       for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
@@ -424,7 +431,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
   // we are storing the following tiles in shared memory:
   // - Input tiles: qTile, vTile, kTile -> (QtileDim, dimHeads +
   // SHARED_MEM_PADDING)
-  // - Intermediate result tile: cTile -> (QtileDim, KVtileDim +
+  // TODO from here add input & forgetgate tiles
+  // - Intermediate result tile: cTile, dTile -> (QtileDim, KVtileDim +
   // SHARED_MEM_PADDING)
   // - Output tile: hTile -> (QtileDim, dimHeads + SHARED_MEM_PADDING)
 
@@ -433,6 +441,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
   const uint cdTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
 
+  // Input/Output tiles: 4x for qTile, vTile, kTile, hTile
+  // Intermediate tiles: 2x for cTile, dTile
   const uint sharedMemorySize =
       4 * qkvhTileSharedMemSize + 2 * cdTileSharedMemSize;
 

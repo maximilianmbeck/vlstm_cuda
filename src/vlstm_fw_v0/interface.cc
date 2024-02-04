@@ -19,14 +19,14 @@ Tensor interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV) {
   const auto seqLen = matQ.size(2);
   const auto dimHeads = matQ.size(3);
 
-  // checks: matK & matV should have the same shape
+  // checks: matQ & matK & matV should have the same shape
+  // TODO: for later: enable different qk dim and v dim
   if (!(matK.size(0) == batchSize && matV.size(0) == batchSize)) {
     printf("matK & matV should have the same batch size!\n");
   }
   if (!(matK.size(1) == numHeads && matV.size(1) == numHeads)) {
     printf("matK & matV should have the same number of heads!\n");
   }
-  // Note matrix K is transposed
   if (!(matK.size(2) == seqLen && matV.size(2) == seqLen)) {
     printf("matK & matV should have the same sequence length!\n");
   }
@@ -34,6 +34,7 @@ Tensor interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV) {
     printf("matK & matV should have the same dimension of heads!\n");
   }
 
+  // TODO from here: replace by forgetgate & inputgate
   auto matC =
       torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matQ.options());
 
