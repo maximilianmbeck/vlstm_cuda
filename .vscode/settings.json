@@ -26,6 +26,7 @@
         "**/.git/subtree-cache/**": true,
         "**/node_modules/*/**": true
     },
+    "jupyter.debugJustMyCode": false,
     "python.linting.enabled": false,
     "C_Cpp.intelliSenseEngine": "disabled",
     "C_Cpp.default.cppStandard": "c++17",
