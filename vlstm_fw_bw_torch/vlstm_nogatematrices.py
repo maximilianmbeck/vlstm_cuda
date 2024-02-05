@@ -2,7 +2,6 @@
 # Author: Maximilian Beck
 
 import math
-from typing import Any, Tuple
 
 import torch
 
