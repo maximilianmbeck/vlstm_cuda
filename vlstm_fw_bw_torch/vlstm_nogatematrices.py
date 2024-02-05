@@ -258,24 +258,31 @@ def vlstm_fw_nogatematrices_nostabilization(
     values: torch.Tensor,
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
+    temp_Ctilde: torch.Tensor,  # (S, S)
+    temp_D: torch.Tensor,  # (S, S)
+    temp_QK: torch.Tensor,  # (S, S)
+    temp_N: torch.Tensor,  # (S, 1)
     eps: float = 1e-6,
 ):
     B, NH, S, DH = queries.shape
     _dtype, _device = queries.dtype, queries.device
 
-    var_Dtile = fgate_preact + igate_preact
+    var_Dtilde = fgate_preact + igate_preact
 
-    var_D = torch.exp(var_Dtile)
+    var_D = torch.exp(var_Dtilde) + temp_D
 
     keys = keys / math.sqrt(DH)
 
-    var_QK = queries @ keys.transpose(-2, -1)
+    var_QK = queries @ keys.transpose(-2, -1) + temp_QK
 
-    var_Ctilde = var_QK * var_D
+    var_Ctilde = var_QK * var_D + temp_Ctilde
 
     var_B = var_Ctilde.sum(dim=-1, keepdim=True)
 
-    var_N = torch.maximum(var_B.abs(), 1.0)
+    var_N = (
+        torch.maximum(var_B.abs(), torch.tensor(1.0, dtype=_dtype, device=_device))
+        + temp_N
+    )
 
     var_C = var_Ctilde / (var_N + eps)
 
@@ -289,10 +296,23 @@ def vlstm_fwbw_nogatematrices_nostabilization(
     values: torch.Tensor,
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
+    temp_Ctilde: torch.Tensor,  # (S, S)
+    temp_D: torch.Tensor,  # (S, S)
+    temp_QK: torch.Tensor,  # (S, S)
+    temp_N: torch.Tensor,  # (S, 1)
     eps: float = 1e-6,
 ):
     return vLSTMFwBwNoGateMatricesNoStabilization.apply(
-        queries, keys, values, igate_preact, fgate_preact, eps
+        queries,
+        keys,
+        values,
+        igate_preact,
+        fgate_preact,
+        temp_Ctilde,
+        temp_D,
+        temp_QK,
+        temp_N,
+        eps,
     )
 
 
@@ -305,6 +325,10 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         values: torch.Tensor,
         igate_preact: torch.Tensor,
         fgate_preact: torch.Tensor,
+        temp_Ctilde: torch.Tensor,  # (S, S)
+        temp_D: torch.Tensor,  # (S, S)
+        temp_QK: torch.Tensor,  # (S, S)
+        temp_N: torch.Tensor,  # (S, 1)
         eps: float = 1e-6,
     ) -> torch.Tensor:
         """
@@ -314,6 +338,7 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
             values (torch.Tensor): (B, NH, S, DH)
             igate_preact (torch.Tensor): (B, NH, S, S)
             fgate_preact (torch.Tensor): (B, NH, S, S)
+            temp (torch.Tensor): (B, NH, S, S)
             stabilize_rowwise (bool, optional): Wether to stabilize the combination matrix C rowwise (take maximum per row).
                 Alternative: Subtract the maximum over all rows. Defaults to True.
             eps (float, optional): Small constant to stabilize the division. Defaults to 1e-6.
@@ -321,19 +346,22 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         B, NH, S, DH = queries.shape
         _dtype, _device = queries.dtype, queries.device
 
-        var_Dtile = fgate_preact + igate_preact
+        var_Dtilde = fgate_preact + igate_preact
 
-        var_D = torch.exp(var_Dtile)
+        var_D = torch.exp(var_Dtilde) + temp_D
 
         keys = keys / math.sqrt(DH)
 
-        var_QK = queries @ keys.transpose(-2, -1)
+        var_QK = queries @ keys.transpose(-2, -1) + temp_QK
 
-        var_Ctilde = var_QK * var_D
+        var_Ctilde = var_QK * var_D + temp_Ctilde
 
-        var_B = var_Ctilde.sum(dim=-1, keepdim=True)
+        var_B = var_Ctilde.sum(dim=-1, keepdim=True) + temp_B
 
-        var_N = torch.maximum(var_B.abs(), 1.0)
+        var_N = (
+            torch.maximum(var_B.abs(), torch.tensor(1.0, dtype=_dtype, device=_device))
+            + temp_N
+        )
 
         var_C = var_Ctilde / (var_N + eps)
 
@@ -363,15 +391,26 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         # intermediate delta-errors
         delta_C = grad_var_R @ values.transpose(-2, -1)
 
-        delta_N = -delta_C * (1 / (torch.square(var_N) + eps))
+        delta_N = (-delta_C * var_Ctilde * (1 / (torch.square(var_N) + eps))).sum(
+            dim=-1, keepdim=True
+        )
 
         var_sumCtilde = var_Ctilde.sum(dim=-1, keepdim=True)
 
-        delta_B_ = delta_N * var_sumCtilde / (torch.abs(var_sumCtilde) + eps)
-        delta_B = torch.where(var_sumCtilde > 1.0, delta_B_, 0.0)
+        # delta_B_ = delta_N * var_sumCtilde / (torch.abs(var_sumCtilde) + eps)
+        delta_B_ = delta_N * torch.sign(var_sumCtilde)
+        delta_B = torch.where(
+            torch.abs(var_sumCtilde) > 1.0,
+            delta_B_,
+            torch.tensor(0.0, dtype=_dtype, device=_device),
+        )
 
-        delta_Ctilde_C = delta_C / (var_N + eps)
-        delta_Ctilde_B = delta_B  # will be broadcasted automatically
+        delta_Ctilde_C = delta_C.sum(dim=-1, keepdim=True) / (
+            var_N.transpose(-2, -1) + eps
+        )
+        delta_Ctilde_B = delta_B * torch.ones(
+            (1, S), dtype=_dtype, device=_device
+        )  # will be broadcasted automatically
         delta_Ctilde = delta_Ctilde_C + delta_Ctilde_B
 
         delta_D = delta_Ctilde * var_QK
@@ -382,7 +421,7 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         delta_F = delta_Dtilde
         delta_I = delta_Dtilde
 
-        delta_Q = (delta_Ctilde * var_D) @ (keys)
+        delta_Q = (delta_Ctilde * var_D) @ (keys / math.sqrt(DH))
         delta_K = (delta_Ctilde * var_D).transpose(-2, -1) @ (queries / math.sqrt(DH))
         delta_V = var_C.transpose(-2, -1) @ grad_var_R
 
@@ -391,12 +430,20 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         grad_var_v = delta_V
         grad_var_igate = delta_I
         grad_var_fgate = delta_F
+        grad_temp_Ctilde = delta_Ctilde
+        grad_temp_D = delta_D
+        grad_temp_QK = delta_Ctilde * var_D
+        grad_temp_N = delta_N
         return (
             grad_var_q,
             grad_var_k,
             grad_var_v,
             grad_var_igate,
             grad_var_fgate,
+            grad_temp_Ctilde,
+            grad_temp_D,
+            grad_temp_QK,
+            grad_temp_N,
             None,
             None,
         )
