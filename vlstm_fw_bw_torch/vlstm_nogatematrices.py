@@ -262,6 +262,7 @@ def vlstm_fw_nogatematrices_nostabilization(
     temp_D: torch.Tensor,  # (S, S)
     temp_QK: torch.Tensor,  # (S, S)
     temp_N: torch.Tensor,  # (S, 1)
+    temp_B: torch.Tensor,  # (S, 1)
     eps: float = 1e-6,
 ):
     B, NH, S, DH = queries.shape
@@ -277,7 +278,7 @@ def vlstm_fw_nogatematrices_nostabilization(
 
     var_Ctilde = var_QK * var_D + temp_Ctilde
 
-    var_B = var_Ctilde.sum(dim=-1, keepdim=True)
+    var_B = var_Ctilde.sum(dim=-1, keepdim=True) + temp_B
 
     var_N = (
         torch.maximum(var_B.abs(), torch.tensor(1.0, dtype=_dtype, device=_device))
@@ -300,6 +301,7 @@ def vlstm_fwbw_nogatematrices_nostabilization(
     temp_D: torch.Tensor,  # (S, S)
     temp_QK: torch.Tensor,  # (S, S)
     temp_N: torch.Tensor,  # (S, 1)
+    temp_B: torch.Tensor,  # (S, 1)
     eps: float = 1e-6,
 ):
     return vLSTMFwBwNoGateMatricesNoStabilization.apply(
@@ -312,6 +314,7 @@ def vlstm_fwbw_nogatematrices_nostabilization(
         temp_D,
         temp_QK,
         temp_N,
+        temp_B,
         eps,
     )
 
@@ -329,6 +332,7 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         temp_D: torch.Tensor,  # (S, S)
         temp_QK: torch.Tensor,  # (S, S)
         temp_N: torch.Tensor,  # (S, 1)
+        temp_B: torch.Tensor,  # (S, 1)
         eps: float = 1e-6,
     ) -> torch.Tensor:
         """
@@ -405,9 +409,7 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
             torch.tensor(0.0, dtype=_dtype, device=_device),
         )
 
-        delta_Ctilde_C = delta_C.sum(dim=-1, keepdim=True) / (
-            var_N.transpose(-2, -1) + eps
-        )
+        delta_Ctilde_C = delta_C / (var_N + eps)
         delta_Ctilde_B = delta_B * torch.ones(
             (1, S), dtype=_dtype, device=_device
         )  # will be broadcasted automatically
@@ -421,7 +423,7 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         delta_F = delta_Dtilde
         delta_I = delta_Dtilde
 
-        delta_Q = (delta_Ctilde * var_D) @ (keys / math.sqrt(DH))
+        delta_Q = (delta_Ctilde * var_D) @ (keys)
         delta_K = (delta_Ctilde * var_D).transpose(-2, -1) @ (queries / math.sqrt(DH))
         delta_V = var_C.transpose(-2, -1) @ grad_var_R
 
@@ -434,6 +436,7 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         grad_temp_D = delta_D
         grad_temp_QK = delta_Ctilde * var_D
         grad_temp_N = delta_N
+        grad_temp_B = delta_B
         return (
             grad_var_q,
             grad_var_k,
@@ -444,6 +447,7 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
             grad_temp_D,
             grad_temp_QK,
             grad_temp_N,
+            grad_temp_B,
             None,
             None,
         )
