@@ -164,15 +164,15 @@ class vLSTMFwBwNoGateMatrices(torch.autograd.Function):
         B, NH, S, DH = queries.shape
         _dtype, _device = queries.dtype, queries.device
 
-        var_Dtile = fgate_preact + igate_preact
+        var_Dtilde = fgate_preact + igate_preact
         if stabilize_rowwise:
-            var_M, _ = torch.max(var_Dtile, dim=-1, keepdim=True)
+            var_M, _ = torch.max(var_Dtilde, dim=-1, keepdim=True)
         else:
-            var_M = torch.max(var_Dtile.view(B, NH, -1), dim=-1, keepdim=True)[
+            var_M = torch.max(var_Dtilde.view(B, NH, -1), dim=-1, keepdim=True)[
                 0
             ].unsqueeze(-1)
 
-        var_D = torch.exp(var_Dtile - var_M)
+        var_D = torch.exp(var_Dtilde - var_M)
 
         keys = keys / math.sqrt(DH)
 
@@ -213,15 +213,24 @@ class vLSTMFwBwNoGateMatrices(torch.autograd.Function):
         # intermediate delta-errors
         delta_C = grad_var_R @ values.transpose(-2, -1)
 
-        delta_N = -delta_C * (1 / (torch.square(var_N) + eps))
+        delta_N = (-delta_C * var_Ctilde * (1 / (torch.square(var_N) + eps))).sum(
+            dim=-1, keepdim=True
+        )
 
         var_sumCtilde = var_Ctilde.sum(dim=-1, keepdim=True)
 
-        delta_B_ = delta_N * var_sumCtilde / (torch.abs(var_sumCtilde) + eps)
-        delta_B = torch.where(var_sumCtilde > torch.exp(-var_M), delta_B_, 0.0)
+        # delta_B_ = delta_N * var_sumCtilde / (torch.abs(var_sumCtilde) + eps)
+        delta_B_ = delta_N * torch.sign(var_sumCtilde)
+        delta_B = torch.where(
+            torch.abs(var_sumCtilde) > torch.exp(-var_M),
+            delta_B_,
+            torch.tensor(0.0, dtype=_dtype, device=_device),
+        )
 
         delta_Ctilde_C = delta_C / (var_N + eps)
-        delta_Ctilde_B = delta_B  # will be broadcasted automatically
+        delta_Ctilde_B = (
+            delta_B  # will be broadcasted automatically along last dimension
+        )
         delta_Ctilde = delta_Ctilde_C + delta_Ctilde_B
 
         delta_D = delta_Ctilde * var_QK
@@ -410,9 +419,9 @@ class vLSTMFwBwNoGateMatricesNoStabilization(torch.autograd.Function):
         )
 
         delta_Ctilde_C = delta_C / (var_N + eps)
-        delta_Ctilde_B = delta_B * torch.ones(
-            (1, S), dtype=_dtype, device=_device
-        )  # will be broadcasted automatically
+        delta_Ctilde_B = (
+            delta_B  # will be broadcasted automatically along last dimension
+        )
         delta_Ctilde = delta_Ctilde_C + delta_Ctilde_B
 
         delta_D = delta_Ctilde * var_QK
