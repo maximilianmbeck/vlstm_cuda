@@ -66,7 +66,7 @@ class vLSTMFwBwDtildemat(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, igate_preact, fgate_preact):
-
+        ctx.save_for_backward(fgate_preact)
         B, NH, S, _ = fgate_preact.shape
         _dtype, _device = fgate_preact.dtype, fgate_preact.device
 
@@ -106,13 +106,45 @@ class vLSTMFwBwDtildemat(torch.autograd.Function):
         ltr_ig = torch.where(ltr, 0.0, -float("inf"))
         ig_matrix = igate_preact.transpose(-2, -1) + ltr_ig  # (B, NH, S, S)
 
-        ctx.save_for_backward(ltr)
-
         dmat = log_fg_matrix + ig_matrix
         return dmat
 
     @staticmethod
-    def backward(ctx, grad_fg, grad_ig):
-        ltr = ctx.saved_tensors
+    def backward(ctx, grad_dtilde_mat):
+        (fgate_preact,) = ctx.saved_tensors
+        B, NH, S, _ = grad_dtilde_mat.shape
+        _dtype, _device = grad_dtilde_mat.dtype, grad_dtilde_mat.device
 
-        return None, None
+        # delta_f: forget gate preactivation delta errors
+        ltr = torch.tril(
+            torch.ones(
+                (S, S),
+                dtype=torch.bool,
+                device=_device,
+            ),
+            diagonal=-1,
+        )
+        masked_grad_dtilde_mat = torch.where(
+            ltr,
+            grad_dtilde_mat,
+            torch.tensor(0.0, device=_device, dtype=_dtype),
+        )
+
+        delta_fbar = torch.zeros((B, NH, S, 1), device=_device, dtype=_dtype)
+        # # first forget gate index (k=0) does not get a gradient (since it is not used in the forward pass)
+        # TODO implement this in a more efficient way
+        for k in range(1, S):
+            for j in range(k):
+                delta_fbar[:, :, k, 0] += (
+                    masked_grad_dtilde_mat[:, :, k:, j].view(B, NH, -1).sum(dim=-1)
+                )
+
+        delta_f = delta_fbar * torch.sigmoid(-fgate_preact)
+
+        # delta_i: input gate preactivation delta errors
+        delta_i = torch.sum(grad_dtilde_mat, dim=-2).unsqueeze_(-1)
+
+        grad_igate_preact = delta_i
+        grad_fgate_preact = delta_f
+
+        return grad_igate_preact, grad_fgate_preact
