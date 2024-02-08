@@ -10,9 +10,9 @@ def log_sigmoid(x):
     )
 
 
-def vlstm_fw_prepare_gate_preacts(
+def vlstm_fw_Dtildemat(
     igate_preact: torch.Tensor, fgate_preact: torch.Tensor
-) -> tuple[torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     B, NH, S, _ = fgate_preact.shape
     _dtype, _device = fgate_preact.dtype, fgate_preact.device
 
@@ -52,16 +52,17 @@ def vlstm_fw_prepare_gate_preacts(
     ltr_ig = torch.where(ltr, 0.0, -float("inf"))
     ig_matrix = igate_preact.transpose(-2, -1) + ltr_ig  # (B, NH, S, S)
 
-    return log_fg_matrix, ig_matrix
+    dmat = log_fg_matrix + ig_matrix
+    return dmat
 
 
-def vlstm_fwbw_prepare_gate_preacts(
+def vlstm_fwbw_Dtildemat(
     igate_preact: torch.Tensor, fgate_preact: torch.Tensor
-):
-    pass
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return vLSTMFwBwDtildemat.apply(igate_preact, fgate_preact)
 
 
-class vLSTMFwBwPrepareGatePreacts(torch.autograd.Function):
+class vLSTMFwBwDtildemat(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, igate_preact, fgate_preact):
@@ -106,7 +107,9 @@ class vLSTMFwBwPrepareGatePreacts(torch.autograd.Function):
         ig_matrix = igate_preact.transpose(-2, -1) + ltr_ig  # (B, NH, S, S)
 
         ctx.save_for_backward(ltr)
-        return log_fg_matrix, ig_matrix
+
+        dmat = log_fg_matrix + ig_matrix
+        return dmat
 
     @staticmethod
     def backward(ctx, grad_fg, grad_ig):
