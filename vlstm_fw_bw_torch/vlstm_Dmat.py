@@ -116,16 +116,16 @@ class vLSTMFwBwDtildemat(torch.autograd.Function):
         _dtype, _device = grad_dtilde_mat.dtype, grad_dtilde_mat.device
 
         # delta_f: forget gate preactivation delta errors
-        ltr = torch.tril(
+        ltr_dm1 = torch.tril(
             torch.ones(
                 (S, S),
                 dtype=torch.bool,
                 device=_device,
             ),
-            diagonal=-1,
+            diagonal=-1,  #! Also mask out the diagonal as it is constant 1 in the D matrix
         )
         masked_grad_dtilde_mat = torch.where(
-            ltr,
+            ltr_dm1,
             grad_dtilde_mat,
             torch.tensor(0.0, device=_device, dtype=_dtype),
         )
