@@ -191,9 +191,11 @@ class vLSTMFwBwFull(torch.autograd.Function):
 
         var_D = torch.exp(var_Dtilde - var_M)
 
-        keys = keys / math.sqrt(DH)
+        keys_normalized = keys / math.sqrt(
+            DH
+        )  # we redefine keys here, therefore we do not need to divide by sqrt(DH) at the end
 
-        var_QK = queries @ keys.transpose(-2, -1)
+        var_QK = queries @ keys_normalized.transpose(-2, -1)
 
         var_Ctilde = var_QK * var_D
 
@@ -297,7 +299,7 @@ class vLSTMFwBwFull(torch.autograd.Function):
 
         # output delta-errors / gradients
 
-        delta_Q = (delta_Ctilde * var_D) @ (keys)
+        delta_Q = (delta_Ctilde * var_D) @ (keys / math.sqrt(DH))
         delta_K = (delta_Ctilde * var_D).transpose(-2, -1) @ (queries / math.sqrt(DH))
         delta_V = var_C.transpose(-2, -1) @ grad_var_R
 
