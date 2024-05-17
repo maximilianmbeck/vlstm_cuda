@@ -88,10 +88,10 @@ def vlstm_fw_torch(
     log_D_matrix_stabilized = log_D_matrix - max_log_D  # (B, NH, S, S)
     D_matrix = torch.exp(log_D_matrix_stabilized)  # (B, NH, S, S)
 
-    keys = keys / math.sqrt(DH)
+    keys_scaled = keys / math.sqrt(DH)
 
     # combination matrix C
-    qk_matrix = queries @ keys.transpose(-2, -1)  # (B, NH, S, S)
+    qk_matrix = queries @ keys_scaled.transpose(-2, -1)  # (B, NH, S, S)
     C_matrix = qk_matrix * D_matrix  # (B, NH, S, S)
     normalizer = torch.maximum(
         C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D)
