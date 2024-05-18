@@ -114,7 +114,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
   scalar_t *hTile =
       (scalar_t *)&cTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
   // init dTile (QTileDim x KVTileDim) in shared memory for forget and input
-  // gate matrix
+  // gate matrix // TODO not used in this kernel so far
   scalar_t *dTile =
       (scalar_t *)&hTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
 
@@ -446,7 +446,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
   const uint sharedMemorySize =
       4 * qkvhTileSharedMemSize + 2 * cdTileSharedMemSize;
 
-  printf("blocksxy: %d-%d, threads: %d-%d, shared_mem in bytes: %d\n",
+  printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
   // cudaSetDevice(0);
 

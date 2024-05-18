@@ -75,8 +75,9 @@ def vlstm_fw_torch(
         ltr, _log_fg_matrix[:, :, 1:, 1:], -float("inf")
     )  # (B, NH, S, S)
 
+    ig_matrix = igate_preact.transpose(-2, -1)  # (B, NH, S, S)
     # gate decay matrix D (combination of forget gate and input gate)
-    log_D_matrix = log_fg_matrix + igate_preact.transpose(-2, -1)  # (B, NH, S, S)
+    log_D_matrix = log_fg_matrix + ig_matrix  # (B, NH, S, S)
     # D matrix stabilization
     if stabilize_rowwise:
         max_log_D, _ = torch.max(log_D_matrix, dim=-1, keepdim=True)  # (B, NH, S, 1)
@@ -100,5 +101,5 @@ def vlstm_fw_torch(
     C_matrix_normalized = C_matrix / (normalizer + eps)
 
     # retrieved values
-    retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
-    return retrieved_values
+    h_tilde_state = C_matrix_normalized @ values  # (B, NH, S, DH)
+    return h_tilde_state, log_fg_matrix, ig_matrix
