@@ -116,15 +116,15 @@ def vlstm_fw_tiled_torch(
                     s_tile * torch.exp(d_tile - m)
                 ).sum(dim=-1, keepdim=True)
 
-            c_tile = (s_tile * d_tile) / (
+            c_tile = (s_tile * torch.exp(d_tile - m)) / (
                 torch.maximum(torch.abs(l), torch.exp(-m)) + eps
             )
 
+            h_tile = (l_prev / l) * h_tile + c_tile @ v_tile
+            # h_tile = h_tile + c_tile @ v_tile
+
             m_prev = m
             l_prev = l
-
-            h_tile_cur = c_tile @ v_tile
-            h_tile += h_tile_cur
         h_matrix[:, :, q_idx * bq_tile_size : (q_idx + 1) * bq_tile_size, :] = h_tile
 
     # # D matrix stabilization
