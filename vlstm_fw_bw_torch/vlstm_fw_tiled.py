@@ -138,7 +138,6 @@ def vlstm_fw_torch_ref(
     values: torch.Tensor,
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
-    stabilize_rowwise: bool = True,
     eps: float = 1e-6,
 ) -> torch.Tensor:
     """This is the core vLSTM operation in parallel form.

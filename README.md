@@ -16,11 +16,17 @@ It aims to show the progress of the different kernels.
 - mm_v0: Bring cuda_sample in our folder structure.
 - mm_v1: Play around with matrix multiplication.
 
-3. **Implement a $QK^TV$ (double) matrix multiplication without tensor cores**:
+3. **Implement a $QK^\top V$ (double) matrix multiplication without tensor cores**:
 
 - qkv_v0: First attempt. Wrong computation partitioning. The whole grid was used for single Q and KV tiles. Did not work as we had different parts of the tile in different shared memories of the grid-blocks (streaming multiprocessors).
 - qkv_v1: Second attempt. Now corrected work partitioning. Use one grid block / streaming multiprocessor per Q tile.
 
 4. **Implement vLSTM forward pass without tensor cores**:
 
-- vlstm_fw_v0: Build on qkv_v1, integrate forget&input gates + normalization.
+- vlstm_fw_v0: Build on qkv_v1, make qkv_v1 causal, i.e. compute
+$$
+(QK^\top \odot D) \ V \ ,
+$$
+where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
+
+- **TODO** vlstm_fw_v1: Build on vlstm_fw_0, integrate forget&input gates + normalization. This should be a first fused vlstm kernel. 
