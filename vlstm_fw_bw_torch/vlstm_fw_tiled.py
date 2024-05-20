@@ -102,6 +102,7 @@ def vlstm_fw_tiled_torch(
         n_prev = torch.zeros((B, NH, bq_tile_size, 1), dtype=_dtype, device=_device)
         h_tile = torch.zeros_like(q_tile)
         for kv_idx, (k_tile, v_tile) in enumerate(zip(k_tiles, v_tiles)):
+            # print(f"q_idx: {q_idx*bq_tile_size}, kv_idx: {kv_idx*bkv_tile_size}")
             d_tile = log_D_matrix[
                 :,
                 :,
