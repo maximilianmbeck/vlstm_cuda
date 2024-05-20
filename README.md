@@ -29,4 +29,4 @@ $$
 $$
 where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
 
-- **TODO** vlstm_fw_v1: Build on vlstm_fw_0, integrate forget&input gates + normalization. This should be a first fused vlstm kernel. 
+- **IN PROGRESS** vlstm_fw_v1: Build on vlstm_fw_0, integrate forget&input gates + normalization. This should be a first fused vlstm kernel. 
