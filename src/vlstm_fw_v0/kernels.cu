@@ -28,7 +28,7 @@ namespace cg = cooperative_groups;
 namespace kernels {
 
 template <typename scalar_t, int TblockDim, int QblockDim, int KVblockDim>
-__global__ void vlstm_fw(scalar_t *matC, scalar_t *matQ, scalar_t *matK,
+__global__ void vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
                          scalar_t *matV, int batchSize, int numHeads,
                          int seqLen, int dimHeads);
 
@@ -64,7 +64,7 @@ Conventions:
 /* vLSTM Forward Kernel v0 */
 
 template <typename scalar_t, int TblockDim, int QtileDim, int KVtileDim>
-__global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
+__global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
                                   scalar_t *matK, scalar_t *matV, int batchSize,
                                   int numHeads, int seqLen, int dimHeads) {
   // int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
@@ -353,19 +353,19 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
         //! accumulate KVtiles to hTile
         // (QtileDim,dimHeads) = (QtileDim,KVtileDim) x (KVtileDim,dimHeads)
         // loops over hTile rows (outer) and columns (inner)
-        const uint cWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-        const uint cWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
-        for (uint cWarpTileYIdx = 0; cWarpTileYIdx < cWarpTileYEnd;
-             ++cWarpTileYIdx) {
-          for (uint cWarpTileXIdx = 0; cWarpTileXIdx < cWarpTileXEnd;
-               ++cWarpTileXIdx) {
+        const uint hWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint hWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
+        for (uint hWarpTileYIdx = 0; hWarpTileYIdx < hWarpTileYEnd;
+             ++hWarpTileYIdx) {
+          for (uint hWarpTileXIdx = 0; hWarpTileXIdx < hWarpTileXEnd;
+               ++hWarpTileXIdx) {
 
             //? cTileIdxes
             //* shared memory:
-            const uint cWarpTileThreadSharedMemYIdx =
-                blockDim.y * cWarpTileYIdx + threadIdx.y;
-            const uint cWarpTileThreadSharedMemXIdx =
-                blockDim.x * cWarpTileXIdx + threadIdx.x;
+            const uint hWarpTileThreadSharedMemYIdx =
+                blockDim.y * hWarpTileYIdx + threadIdx.y;
+            const uint hWarpTileThreadSharedMemXIdx =
+                blockDim.x * hWarpTileXIdx + threadIdx.x;
 
             // scalar_t sv_acc = dscalar_zero<scalar_t>();
             float sv_acc = 0.0f;
@@ -373,21 +373,21 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
               sv_acc = add_g(
                   sv_acc,
                   type2float(mul_g(SMEMARRAY(cTile, KVtileDim,
-                                             cWarpTileThreadSharedMemYIdx, i),
+                                             hWarpTileThreadSharedMemYIdx, i),
                                    SMEMARRAY(vTile, dimHeads, i,
-                                             cWarpTileThreadSharedMemXIdx))));
+                                             hWarpTileThreadSharedMemXIdx))));
             }
             // accumulate over all KVtiles
             if (kvTileIdx == 0) {
               // we need to clear the hTile in first iteration
-              SMEMARRAY(hTile, dimHeads, cWarpTileThreadSharedMemYIdx,
-                        cWarpTileThreadSharedMemXIdx) =
+              SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
+                        hWarpTileThreadSharedMemXIdx) =
                   float2type<scalar_t>(sv_acc);
             } else {
-              SMEMARRAY(hTile, dimHeads, cWarpTileThreadSharedMemYIdx,
-                        cWarpTileThreadSharedMemXIdx) =
-                  add_g(SMEMARRAY(hTile, dimHeads, cWarpTileThreadSharedMemYIdx,
-                                  cWarpTileThreadSharedMemXIdx),
+              SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
+                        hWarpTileThreadSharedMemXIdx) =
+                  add_g(SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
+                                  hWarpTileThreadSharedMemXIdx),
                         float2type<scalar_t>(sv_acc));
             }
             __syncthreads();
@@ -397,30 +397,30 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
 
       //! write hTile to global memory (has the same memory index as qTile)
       // loops over hTile rows (outer) and columns (inner)
-      const uint cWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-      const uint cWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
-      for (uint cWarpTileYIdx = 0; cWarpTileYIdx < cWarpTileYEnd;
-           ++cWarpTileYIdx) {
-        for (uint cWarpTileXIdx = 0; cWarpTileXIdx < cWarpTileXEnd;
-             ++cWarpTileXIdx) {
+      const uint hWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+      const uint hWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
+      for (uint hWarpTileYIdx = 0; hWarpTileYIdx < hWarpTileYEnd;
+           ++hWarpTileYIdx) {
+        for (uint hWarpTileXIdx = 0; hWarpTileXIdx < hWarpTileXEnd;
+             ++hWarpTileXIdx) {
 
           //? cTileIdxes
           //* shared memory:
-          const uint cWarpTileThreadSharedMemYIdx =
-              blockDim.y * cWarpTileYIdx + threadIdx.y;
-          const uint cWarpTileThreadSharedMemXIdx =
-              blockDim.x * cWarpTileXIdx + threadIdx.x;
+          const uint hWarpTileThreadSharedMemYIdx =
+              blockDim.y * hWarpTileYIdx + threadIdx.y;
+          const uint hWarpTileThreadSharedMemXIdx =
+              blockDim.x * hWarpTileXIdx + threadIdx.x;
           //* global memory:
           // left upper corner of cWarpTileBlock in C (global memory)
-          const uint cWarpTileBlockGlobalMemIdx =
-              qTileBlockGlobalMemIdx + (dimHeads * blockDim.y) * cWarpTileYIdx +
-              blockDim.x * cWarpTileXIdx;
-          const uint cWarpTileThreadGlobalMemIdx =
-              cWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
+          const uint hWarpTileBlockGlobalMemIdx =
+              qTileBlockGlobalMemIdx + (dimHeads * blockDim.y) * hWarpTileYIdx +
+              blockDim.x * hWarpTileXIdx;
+          const uint hWarpTileThreadGlobalMemIdx =
+              hWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
 
-          matC[cWarpTileThreadGlobalMemIdx] =
-              SMEMARRAY(hTile, dimHeads, cWarpTileThreadSharedMemYIdx,
-                        cWarpTileThreadSharedMemXIdx);
+          matH[hWarpTileThreadGlobalMemIdx] =
+              SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
+                        hWarpTileThreadSharedMemXIdx);
         }
       }
       __syncthreads();
@@ -429,7 +429,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matC, scalar_t *matQ,
 }
 
 template <typename scalar_t>
-void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
+void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matH, scalar_t *matQ,
                                            scalar_t *matK, scalar_t *matV,
                                            int batchSize, int numHeads,
                                            int seqLen, int dimHeads) {
@@ -493,7 +493,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
                        sharedMemorySize);
 
   // define void* pointers to the kernel arguments
-  void *kernelArgs[] = {(void *)&matC,   (void *)&matQ,      (void *)&matK,
+  void *kernelArgs[] = {(void *)&matH,   (void *)&matQ,      (void *)&matK,
                         (void *)&matV,   (void *)&batchSize, (void *)&numHeads,
                         (void *)&seqLen, (void *)&dimHeads};
 
@@ -512,13 +512,13 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matC, scalar_t *matQ,
 
 // this is needed to make sure that the compiler instantiates the template
 template void kernel_dispatchers::vlstm_fw_dispatch<__nv_bfloat16>(
-    __nv_bfloat16 *matC, __nv_bfloat16 *matQ, __nv_bfloat16 *matK,
+    __nv_bfloat16 *matH, __nv_bfloat16 *matQ, __nv_bfloat16 *matK,
     __nv_bfloat16 *matV, int batchSize, int numHeads, int seqLen, int dimHeads);
 template void kernel_dispatchers::vlstm_fw_dispatch<__half>(
-    __half *matC, __half *matQ, __half *matK, __half *matV, int batchSize,
+    __half *matH, __half *matQ, __half *matK, __half *matV, int batchSize,
     int numHeads, int seqLen, int dimHeads);
 template void kernel_dispatchers::vlstm_fw_dispatch<float>(
-    float *matC, float *matQ, float *matK, float *matV, int batchSize,
+    float *matH, float *matQ, float *matK, float *matV, int batchSize,
     int numHeads, int seqLen, int dimHeads);
 
 } // namespace vlstm
