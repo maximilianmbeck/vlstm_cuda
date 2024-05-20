@@ -142,7 +142,6 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
     //! PARALLELIZE ALONG SEQLEN (gridDim.y)
     // Ends for looplevel 1&2:
     const uint qTileEnd = CEIL_DIV(seqLen, QtileDim * gridDim.y);
-    const uint kvTileEnd = CEIL_DIV(seqLen, KVtileDim);
     // looplevel 1: loop over Qtile blocks along seqLen dim
     for (uint qTileIdx = 0; qTileIdx < qTileEnd; ++qTileIdx) {
 
@@ -224,7 +223,10 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
       __syncthreads(); // TODO: necessary?
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
-      //! For causal computation: kvTileIdx <= qTileIdx + blockIdx.y
+      //! For causal computation: kvTileIdx <= qTileIdx * gridDim.y + blockIdx.y
+      // other working version: kvTileIdx < kvTileEnd (inefficient due to
+      // loading of unnecessary numbers)
+      const uint kvTileEnd = qTileIdx * gridDim.y + blockIdx.y + 1;
       for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
 
         // offset in K&V matrix for kTile & vTile (global memory)
@@ -390,7 +392,9 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
         }
       }
 
-      // TODO sync all blocks here
+      // TODO sync all blocks here, necessary? The loop above has different
+      // number of iterations for each block
+      // gridGroup.sync();
 
       //! write hTile to global memory (has the same memory index as qTile)
       // loops over hTile rows (outer) and columns (inner)
