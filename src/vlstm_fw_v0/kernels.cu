@@ -237,7 +237,9 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
         // (grid&block) offset X-axis in C = Q*K^T matrix (along sequence
         // dimension) (used for checking causality)
         const uint cTileGridXIdx = KVtileDim * kvTileIdx;
-        const uint cTileBlockXIdx = cTileGridXIdx; // + KVtileDim * blockIdx.y;
+        const uint cTileBlockXIdx =
+            cTileGridXIdx; // TODO check this (probably not): + KVtileDim *
+                           // blockIdx.y;
 
         //! kTile & vTile Loading
         // loops over rows (outer) and columns (inner) of kTile & vTile
@@ -307,40 +309,53 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
         const uint cWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
         for (uint cWarpTileYIdx = 0; cWarpTileYIdx < cWarpTileYEnd;
              ++cWarpTileYIdx) {
+          //* (thread) offset Y-axis in C = Q*K^T
+          const uint cTileThreadYIdx =
+              cTileBlockYIdx + blockDim.y * cWarpTileYIdx + threadIdx.y;
+
           for (uint cWarpTileXIdx = 0; cWarpTileXIdx < cWarpTileXEnd;
                ++cWarpTileXIdx) {
-            //? sTileIdxes
+            //? cTileIdxes
             //* shared memory:
             const uint cWarpTileThreadSharedMemYIdx =
                 blockDim.y * cWarpTileYIdx + threadIdx.y;
             const uint cWarpTileThreadSharedMemXIdx =
                 blockDim.x * cWarpTileXIdx + threadIdx.x;
 
+            //* (thread) offset X-axis in C = Q*K^T
+            const uint cTileThreadXIdx =
+                cTileBlockXIdx + blockDim.x * cWarpTileXIdx + threadIdx.x;
+
             // scalar_t qk_acc = dscalar_zero<scalar_t>();
             float qk_acc = 0.0f;
-            for (uint i = 0; i < dimHeads; ++i) {
-              qk_acc = add_g(qk_acc,
-                             type2float(mul_g(
-                                 SMEMARRAY(qTile, dimHeads,
-                                           cWarpTileThreadSharedMemYIdx, i),
-                                 SMEMARRAY(kTile, dimHeads,
-                                           cWarpTileThreadSharedMemXIdx, i))));
+            //! check for causality here
+            // compute only the lower triangle (below main diagonal) of C =
+            // Q*K^T
+            if (cTileThreadXIdx <= cTileThreadYIdx) {
+              for (uint i = 0; i < dimHeads; ++i) {
+                qk_acc = add_g(
+                    qk_acc, type2float(mul_g(
+                                SMEMARRAY(qTile, dimHeads,
+                                          cWarpTileThreadSharedMemYIdx, i),
+                                SMEMARRAY(kTile, dimHeads,
+                                          cWarpTileThreadSharedMemXIdx, i))));
 #ifdef DEBUG4
-              if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
-                  (threadIdx.x == 0) && (threadIdx.y == 3) &&
-                  (cWarpTileXIdx == 0) && (kvTileIdx == 0) &&
-                  (i == dimHeads - 1)) {
-                printf("qTIdx=%d|kvTIdx=%d: qTile[%d][%d] = %f\n", qTileIdx,
-                       kvTileIdx, cWarpTileThreadSharedMemYIdx, i,
-                       type2float(qTile[cWarpTileThreadSharedMemYIdx][i]));
-                printf("qTIdx=%d|kvTIdx=%d: kTile[%d][%d] = %f\n", qTileIdx,
-                       kvTileIdx, cWarpTileThreadSharedMemXIdx, i,
-                       type2float(kTile[cWarpTileThreadSharedMemXIdx][i]));
-                printf("qTIdx=%d|kvTIdx=%d: cTile[%d][%d](%d) = %f\n", qTileIdx,
-                       kvTileIdx, cWarpTileThreadSharedMemYIdx,
-                       cWarpTileThreadSharedMemXIdx, i, type2float(qk_acc));
-              }
+                if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                    (threadIdx.x == 0) && (threadIdx.y == 3) &&
+                    (cWarpTileXIdx == 0) && (kvTileIdx == 0) &&
+                    (i == dimHeads - 1)) {
+                  printf("qTIdx=%d|kvTIdx=%d: qTile[%d][%d] = %f\n", qTileIdx,
+                         kvTileIdx, cWarpTileThreadSharedMemYIdx, i,
+                         type2float(qTile[cWarpTileThreadSharedMemYIdx][i]));
+                  printf("qTIdx=%d|kvTIdx=%d: kTile[%d][%d] = %f\n", qTileIdx,
+                         kvTileIdx, cWarpTileThreadSharedMemXIdx, i,
+                         type2float(kTile[cWarpTileThreadSharedMemXIdx][i]));
+                  printf("qTIdx=%d|kvTIdx=%d: cTile[%d][%d](%d) = %f\n",
+                         qTileIdx, kvTileIdx, cWarpTileThreadSharedMemYIdx,
+                         cWarpTileThreadSharedMemXIdx, i, type2float(qk_acc));
+                }
 #endif
+              }
             }
             SMEMARRAY(cTile, KVtileDim, cWarpTileThreadSharedMemYIdx,
                       cWarpTileThreadSharedMemXIdx) =
