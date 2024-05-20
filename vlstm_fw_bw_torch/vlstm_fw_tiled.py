@@ -92,8 +92,8 @@ def vlstm_fw_tiled_torch(
     v_tiles = torch.split(values, bkv_tile_size, dim=2)
     print(f"q_tiles: {len(q_tiles)}, {q_tiles[0].shape}")
     print(f"kv_tiles: {len(k_tiles)}, {k_tiles[0].shape}")
-    # TODO do not break causality!!!
-    # TODO h scaling after c @ v multiplication missing
+
+    # we do not break causality since the log_fg_matrix is already causal
 
     h_matrix = torch.zeros_like(queries)  # the output matrix
     for q_idx, q_tile in enumerate(q_tiles):
