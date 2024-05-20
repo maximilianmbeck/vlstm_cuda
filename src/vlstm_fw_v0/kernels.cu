@@ -224,8 +224,8 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
       __syncthreads(); // TODO: necessary?
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
-      //! For causal computation: kvTileIdx <= qTileIdx
-      for (uint kvTileIdx = 0; kvTileIdx <= qTileIdx; ++kvTileIdx) {
+      //! For causal computation: kvTileIdx <= qTileIdx + blockIdx.y
+      for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
 
         // offset in K&V matrix for kTile & vTile (global memory)
         // (k-tile & v-tile have the same BlockGlobalMemIdx, we just change the
@@ -237,9 +237,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
         // (grid&block) offset X-axis in C = Q*K^T matrix (along sequence
         // dimension) (used for checking causality)
         const uint cTileGridXIdx = KVtileDim * kvTileIdx;
-        const uint cTileBlockXIdx =
-            cTileGridXIdx; // TODO check this (probably not): + KVtileDim *
-                           // blockIdx.y;
+        const uint cTileBlockXIdx = cTileGridXIdx;
 
         //! kTile & vTile Loading
         // loops over rows (outer) and columns (inner) of kTile & vTile
@@ -247,10 +245,6 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
         const uint kvWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
         for (uint kvWarpTileYIdx = 0; kvWarpTileYIdx < kvWarpTileYEnd;
              ++kvWarpTileYIdx) {
-
-          //* (thread) offset Y-axis in C = Q*K^T
-          const uint cTileThreadYIdx =
-              cTileBlockYIdx + blockDim.y * kvWarpTileYIdx + threadIdx.y;
 
 #ifdef DEBUG2
           if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
@@ -277,27 +271,13 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
             const uint kvWarpTileThreadGlobalMemIdx =
                 kvWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
                 threadIdx.x;
-            //* (thread) offset X-axis in C = Q*K^T
-            const uint cTileThreadXIdx =
-                cTileBlockXIdx + blockDim.x * kvWarpTileXIdx + threadIdx.x;
 
-            // //! check for causality here:
-            // if (cTileThreadXIdx <= cTileThreadYIdx) {
             SMEMARRAY(kTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
                       kvWarpTileThreadSharedMemXIdx) =
                 matK[kvWarpTileThreadGlobalMemIdx];
             SMEMARRAY(vTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
                       kvWarpTileThreadSharedMemXIdx) =
                 matV[kvWarpTileThreadGlobalMemIdx];
-            // }
-            // else {
-            //   SMEMARRAY(kTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
-            //             kvWarpTileThreadSharedMemXIdx) =
-            //       float2type<scalar_t>(0.0f);
-            //   SMEMARRAY(vTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
-            //             kvWarpTileThreadSharedMemXIdx) =
-            //       float2type<scalar_t>(0.0f);
-            // }
           }
         }
         __syncthreads();
@@ -409,6 +389,8 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
           }
         }
       }
+
+      // TODO sync all blocks here
 
       //! write hTile to global memory (has the same memory index as qTile)
       // loops over hTile rows (outer) and columns (inner)
