@@ -122,37 +122,12 @@ def vlstm_fw_tiled_torch(
             c_tile = (s_tile * torch.exp(d_tile - m)) / (n + eps)
 
             h_tile = torch.exp(m_prev - m) * (n_prev / n) * h_tile + c_tile @ v_tile
-            # h_tile = (l_prev / l) * h_tile + c_tile @ v_tile
-            # h_tile = (
-            #     torch.maximum(torch.abs(l_prev / l), torch.exp(-m_prev) / torch.exp(-m))
-            #     * h_tile
-            #     + c_tile @ v_tile
-            # )
-            # h_tile = h_tile + c_tile @ v_tile
 
             m_prev = m
             l_prev = l
             n_prev = n
         h_matrix[:, :, q_idx * bq_tile_size : (q_idx + 1) * bq_tile_size, :] = h_tile
 
-    # # D matrix stabilization
-    # max_log_D, _ = torch.max(log_D_matrix, dim=-1, keepdim=True)  # (B, NH, S, 1)
-    # log_D_matrix_stabilized = log_D_matrix - max_log_D  # (B, NH, S, S)
-    # D_matrix = torch.exp(log_D_matrix_stabilized)  # (B, NH, S, S)
-
-    # keys_scaled = keys / math.sqrt(DH)
-
-    # # combination matrix C
-    # qk_matrix = queries @ keys_scaled.transpose(-2, -1)  # (B, NH, S, S)
-    # C_matrix = qk_matrix * D_matrix  # (B, NH, S, S)
-    # normalizer = torch.maximum(
-    #     C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D)
-    # )  # (B, NH, S, 1)
-    # # (B, NH, S, S)
-    # C_matrix_normalized = C_matrix / (normalizer + eps)
-
-    # # retrieved values
-    # retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
     return h_matrix, m, l
 
 
