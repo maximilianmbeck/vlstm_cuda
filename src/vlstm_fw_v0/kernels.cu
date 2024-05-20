@@ -303,18 +303,18 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
         //! compute C = Q x K^T, i.e. fill cTile
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
         // loops over cTile rows (outer) and columns (inner)
-        const uint sWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-        const uint sWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
-        for (uint sWarpTileYIdx = 0; sWarpTileYIdx < sWarpTileYEnd;
-             ++sWarpTileYIdx) {
-          for (uint sWarpTileXIdx = 0; sWarpTileXIdx < sWarpTileXEnd;
-               ++sWarpTileXIdx) {
+        const uint cWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cWarpTileYIdx = 0; cWarpTileYIdx < cWarpTileYEnd;
+             ++cWarpTileYIdx) {
+          for (uint cWarpTileXIdx = 0; cWarpTileXIdx < cWarpTileXEnd;
+               ++cWarpTileXIdx) {
             //? sTileIdxes
             //* shared memory:
-            const uint sWarpTileThreadSharedMemYIdx =
-                blockDim.y * sWarpTileYIdx + threadIdx.y;
-            const uint sWarpTileThreadSharedMemXIdx =
-                blockDim.x * sWarpTileXIdx + threadIdx.x;
+            const uint cWarpTileThreadSharedMemYIdx =
+                blockDim.y * cWarpTileYIdx + threadIdx.y;
+            const uint cWarpTileThreadSharedMemXIdx =
+                blockDim.x * cWarpTileXIdx + threadIdx.x;
 
             // scalar_t qk_acc = dscalar_zero<scalar_t>();
             float qk_acc = 0.0f;
@@ -322,28 +322,28 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
               qk_acc = add_g(qk_acc,
                              type2float(mul_g(
                                  SMEMARRAY(qTile, dimHeads,
-                                           sWarpTileThreadSharedMemYIdx, i),
+                                           cWarpTileThreadSharedMemYIdx, i),
                                  SMEMARRAY(kTile, dimHeads,
-                                           sWarpTileThreadSharedMemXIdx, i))));
+                                           cWarpTileThreadSharedMemXIdx, i))));
 #ifdef DEBUG4
               if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
                   (threadIdx.x == 0) && (threadIdx.y == 3) &&
-                  (sWarpTileXIdx == 0) && (kvTileIdx == 0) &&
+                  (cWarpTileXIdx == 0) && (kvTileIdx == 0) &&
                   (i == dimHeads - 1)) {
                 printf("qTIdx=%d|kvTIdx=%d: qTile[%d][%d] = %f\n", qTileIdx,
-                       kvTileIdx, sWarpTileThreadSharedMemYIdx, i,
-                       type2float(qTile[sWarpTileThreadSharedMemYIdx][i]));
+                       kvTileIdx, cWarpTileThreadSharedMemYIdx, i,
+                       type2float(qTile[cWarpTileThreadSharedMemYIdx][i]));
                 printf("qTIdx=%d|kvTIdx=%d: kTile[%d][%d] = %f\n", qTileIdx,
-                       kvTileIdx, sWarpTileThreadSharedMemXIdx, i,
-                       type2float(kTile[sWarpTileThreadSharedMemXIdx][i]));
+                       kvTileIdx, cWarpTileThreadSharedMemXIdx, i,
+                       type2float(kTile[cWarpTileThreadSharedMemXIdx][i]));
                 printf("qTIdx=%d|kvTIdx=%d: cTile[%d][%d](%d) = %f\n", qTileIdx,
-                       kvTileIdx, sWarpTileThreadSharedMemYIdx,
-                       sWarpTileThreadSharedMemXIdx, i, type2float(qk_acc));
+                       kvTileIdx, cWarpTileThreadSharedMemYIdx,
+                       cWarpTileThreadSharedMemXIdx, i, type2float(qk_acc));
               }
 #endif
             }
-            SMEMARRAY(cTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
-                      sWarpTileThreadSharedMemXIdx) =
+            SMEMARRAY(cTile, KVtileDim, cWarpTileThreadSharedMemYIdx,
+                      cWarpTileThreadSharedMemXIdx) =
                 float2type<scalar_t>(qk_acc);
             __syncthreads();
           }
