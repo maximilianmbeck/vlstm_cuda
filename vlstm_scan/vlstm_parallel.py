@@ -4,12 +4,7 @@
 import math
 
 import torch
-
-
-def log_sigmoid(x):
-    return torch.where(
-        x > 0.0, torch.log(torch.sigmoid(x)), x - torch.log(1.0 + torch.exp(x))
-    )
+import torch.nn.functional as F
 
 
 def vlstm_fw_torch(
@@ -42,7 +37,7 @@ def vlstm_fw_torch(
     _dtype, _device = queries.dtype, queries.device
 
     # forget gate matrix
-    log_fgates = log_sigmoid(fgate_preact)  # (B, NH, S, 1)
+    log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
     ltr = torch.tril(
         torch.ones(
             (S, S),
@@ -87,10 +82,10 @@ def vlstm_fw_torch(
     log_D_matrix_stabilized = log_D_matrix - max_log_D  # (B, NH, S, S)
     D_matrix = torch.exp(log_D_matrix_stabilized)  # (B, NH, S, S)
 
-    keys = keys / math.sqrt(DH)
+    keys_scaled = keys / math.sqrt(DH)
 
     # combination matrix C
-    qk_matrix = queries @ keys.transpose(-2, -1)  # (B, NH, S, S)
+    qk_matrix = queries @ keys_scaled.transpose(-2, -1)  # (B, NH, S, S)
     C_matrix = qk_matrix * D_matrix  # (B, NH, S, S)
     normalizer = torch.maximum(
         C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D)
@@ -145,7 +140,7 @@ class vLSTMFwBwFull(torch.autograd.Function):
 
         # compute var_Dtilde
         # forget gate matrix
-        log_fgates = log_sigmoid(fgate_preact)  # (B, NH, S, 1)
+        log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
         ltr = torch.tril(
             torch.ones(
                 (S, S),
@@ -191,9 +186,11 @@ class vLSTMFwBwFull(torch.autograd.Function):
 
         var_D = torch.exp(var_Dtilde - var_M)
 
-        keys = keys / math.sqrt(DH)
+        keys_scaled = keys / math.sqrt(
+            DH
+        )  # we redefine keys here, therefore we do not need to divide by sqrt(DH) at the end
 
-        var_QK = queries @ keys.transpose(-2, -1)
+        var_QK = queries @ keys_scaled.transpose(-2, -1)
 
         var_Ctilde = var_QK * var_D
 
@@ -297,7 +294,7 @@ class vLSTMFwBwFull(torch.autograd.Function):
 
         # output delta-errors / gradients
 
-        delta_Q = (delta_Ctilde * var_D) @ (keys)
+        delta_Q = (delta_Ctilde * var_D) @ (keys / math.sqrt(DH))
         delta_K = (delta_Ctilde * var_D).transpose(-2, -1) @ (queries / math.sqrt(DH))
         delta_V = var_C.transpose(-2, -1) @ grad_var_R
 
