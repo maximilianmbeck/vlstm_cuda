@@ -45,9 +45,11 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
 // fine for bf16, fp16 and fp32)
 #define SHARED_MEM_PADDING 8 // SHARED_MEM_PADDING: padding for shared memory
 
-// SMEMARRAY: access shared memory array
+// SMEMARRAY: access shared memory array (2D)
 #define SMEMARRAY(array, stride, row, col)                                     \
   array[(row) * (stride + SHARED_MEM_PADDING) + (col)]
+// SMEMVECTOR: access shared memory vector (1D)
+#define SMEMVECTOR(array, idx) array[(row) * (1 + SHARED_MEM_PADDING)]
 
 #define DEBUG 1
 // #define DEBUG2 1
@@ -114,9 +116,15 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
   scalar_t *hTile =
       (scalar_t *)&cTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
   // init dTile (QTileDim x KVTileDim) in shared memory for forget and input
-  // gate matrix // TODO not used in this kernel so far
+  // gate matrix
   scalar_t *dTile =
       (scalar_t *)&hTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
+
+  //? for input and forget gate
+  // init iChunk (KVTileDim x 1) in shared memory for input gate
+  scalar_t *iChunk = (scalar_t *)&dTile[QtileDim * (1 + SHARED_MEM_PADDING)];
+  // TODO from here
+  //   scalar_t *
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStep = seqLen * dimHeads;
@@ -140,7 +148,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
 #endif
 
     //! PARALLELIZE ALONG SEQLEN (gridDim.y)
-    // Ends for looplevel 1&2:
+    // Ends for looplevel 1:
     const uint qTileEnd = CEIL_DIV(seqLen, QtileDim * gridDim.y);
     // looplevel 1: loop over Qtile blocks along seqLen dim
     for (uint qTileIdx = 0; qTileIdx < qTileEnd; ++qTileIdx) {
@@ -475,10 +483,30 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matH, scalar_t *matQ,
   const uint cdTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
 
+  // See here:
+  // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#device-memory-accesses
+  // the idea of the padding is that every number is stored in a different
+  // memory bank this should help to avoid bank conflicts as many threads need
+  // to access the same input and forget gate values at the same time for the
+  // gate matrix computation
+  // TODO check if this is really helping!
+  const uint iChunkSharedMemSize =
+      sizeof(scalar_t) * KVtileDim * (1 + SHARED_MEM_PADDING);
+  const uint fChunkSharedMemSize =
+      sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
+
+  // we keep these as float as it acts as accumulator
+  const uint fTileColSharedMemSize =
+      sizeof(float) * QtileDim * (1 + SHARED_MEM_PADDING);
+  const uint fTileColLastSharedMemSize =
+      sizeof(float) * 1 * (1 + SHARED_MEM_PADDING);
+
   // Input/Output tiles: 4x for qTile, vTile, kTile, hTile
   // Intermediate tiles: 2x for cTile, dTile
-  const uint sharedMemorySize =
-      4 * qkvhTileSharedMemSize + 2 * cdTileSharedMemSize;
+  const uint sharedMemorySize = 4 * qkvhTileSharedMemSize +
+                                2 * cdTileSharedMemSize + iChunkSharedMemSize +
+                                fChunkSharedMemSize + fTileColSharedMemSize +
+                                fTileColLastSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
