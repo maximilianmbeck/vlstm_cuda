@@ -35,7 +35,7 @@ def vlstm_chunkwise_parallel(
     q_vec_f = log_fgates[:, :, :, :].sum(-1, keepdim=True) - p_vec_f  # q_vec_f_raw
     # print(f"q_vec_f: {q_vec_f.shape}\n{q_vec_f}")
 
-    p_vec = p_vec_f  # + igs  # TODO check!
+    p_vec = p_vec_f
     q_vec = q_vec_f + igs
     g_vec = log_fgates.sum(-1)
     # print(f"g_vec: {g_vec.shape}\n{g_vec}")
