@@ -238,7 +238,7 @@ def vlstm_chunkwise_parallel_3(
         ],
         dim=-1,
     )
-    p_vec_f = log_fgates[:, :, :, :].cumsum(-1)
+    # p_vec_f = log_fgates[:, :, :, :].cumsum(-1)
     print(f"p_vec_f: {p_vec_f.shape}\n{p_vec_f}")
 
     q_vec_f_raw = torch.cat(
@@ -350,7 +350,7 @@ def vlstm_chunkwise_parallel_3(
         log_fg_k_matrix = torch.where(
             ltr, _log_fg_k_matrix[:, :, 1:, 1:], -float("inf")
         )  # (B, NH, L, L)
-
+        print(f"log_fg_k_matrix: {log_fg_k_matrix.shape}\n{log_fg_k_matrix}")
         log_D_k = log_fg_k_matrix + log_ig_k.transpose(-2, -1)  # (B, NH, L, L)
 
         # H_intra
@@ -380,11 +380,11 @@ def vlstm_chunkwise_parallel_3(
         # ? Compute inter chunk contribution: H_inter
         p_k = p_vec[:, :, i, :].clone()
 
-        q_chunk_gated = q_chunk * torch.exp(p_k - m_H).unsqueeze(-1)
+        q_chunk_gated = q_chunk * torch.exp(p_k).unsqueeze(-1)
 
         denom_k_inter = torch.maximum(
             torch.abs(q_chunk_gated @ n_k_inter.unsqueeze(-1)),
-            torch.exp(-m_k - m_H),
+            torch.exp(-m_k),
         )
         H_inter = q_chunk_gated @ C_k / denom_k_inter
 
