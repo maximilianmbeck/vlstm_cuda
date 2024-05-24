@@ -27,18 +27,18 @@ def vlstm_chunkwise_parallel(
 
     # compute the gates, the g and the p and q vectors
     log_fgates = F.logsigmoid(fgs)  # fgs
-    print(f"log_fgates: {log_fgates.shape}\n{log_fgates}")
+    # print(f"log_fgates: {log_fgates.shape}\n{log_fgates}")
 
     p_vec_f = log_fgates[:, :, :, :].cumsum(-1)
-    print(f"p_vec_f: {p_vec_f.shape}\n{p_vec_f}")
+    # print(f"p_vec_f: {p_vec_f.shape}\n{p_vec_f}")
 
     q_vec_f = log_fgates[:, :, :, :].sum(-1, keepdim=True) - p_vec_f  # q_vec_f_raw
-    print(f"q_vec_f: {q_vec_f.shape}\n{q_vec_f}")
+    # print(f"q_vec_f: {q_vec_f.shape}\n{q_vec_f}")
 
     p_vec = p_vec_f  # + igs  # TODO check!
     q_vec = q_vec_f + igs
     g_vec = log_fgates.sum(-1)
-    print(f"g_vec: {g_vec.shape}\n{g_vec}")
+    # print(f"g_vec: {g_vec.shape}\n{g_vec}")
 
     # get the maximum values per chunk for p and q
     p_vec_max = p_vec.max(-1).values
@@ -135,7 +135,7 @@ def vlstm_chunkwise_parallel(
         log_fg_k_matrix = torch.where(
             ltr, _log_fg_k_matrix[:, :, 1:, 1:], -float("inf")
         )  # (B, NH, L, L)
-        print(f"log_fg_k_matrix: {log_fg_k_matrix.shape}\n{log_fg_k_matrix}")
+        # print(f"log_fg_k_matrix: {log_fg_k_matrix.shape}\n{log_fg_k_matrix}")
         log_D_k = log_fg_k_matrix + log_ig_k.transpose(-2, -1)  # (B, NH, L, L)
 
         # H_intra
@@ -166,4 +166,5 @@ def vlstm_chunkwise_parallel(
         )
         H_states[:, :, i, :, :] = H_k_state
 
-    return H_states
+    H_out = rearrange(H_states, "b nh nc l dh -> b nh (nc l) dh")
+    return H_out
