@@ -231,27 +231,27 @@ def vlstm_chunkwise_parallel_3(
     log_fgates = F.logsigmoid(fgs)  # fgs
     print(f"log_fgates: {log_fgates.shape}\n{log_fgates}")
 
-    p_vec_f = torch.cat(
-        [
-            torch.zeros((B, NH, NC, 1), dtype=_dtype, device=_device),
-            log_fgates[:, :, :, :-1].cumsum(-1),
-        ],
-        dim=-1,
-    )
-    # p_vec_f = log_fgates[:, :, :, :].cumsum(-1)
+    # p_vec_f = torch.cat(
+    #     [
+    #         torch.zeros((B, NH, NC, 1), dtype=_dtype, device=_device),
+    #         log_fgates[:, :, :, :-1].cumsum(-1),
+    #     ],
+    #     dim=-1,
+    # )
+    p_vec_f = log_fgates[:, :, :, :].cumsum(-1)
     print(f"p_vec_f: {p_vec_f.shape}\n{p_vec_f}")
 
-    q_vec_f_raw = torch.cat(
-        [
-            torch.zeros((B, NH, NC, 1), dtype=_dtype, device=_device),
-            log_fgates[:, :, :, :-1].cumsum(-1),
-        ],
-        dim=-1,
-    )
-    q_vec_f = log_fgates[:, :, :, :].sum(-1, keepdim=True) - q_vec_f_raw
+    # q_vec_f_raw = torch.cat(
+    #     [
+    #         torch.zeros((B, NH, NC, 1), dtype=_dtype, device=_device),
+    #         log_fgates[:, :, :, 1:].cumsum(-1),
+    #     ],
+    #     dim=-1,
+    # )
+    q_vec_f = log_fgates[:, :, :, :].sum(-1, keepdim=True) - p_vec_f  # q_vec_f_raw
     print(f"q_vec_f: {q_vec_f.shape}\n{q_vec_f}")
 
-    p_vec = p_vec_f + igs
+    p_vec = p_vec_f  # + igs  # TODO check!
     q_vec = q_vec_f + igs
     g_vec = log_fgates.sum(-1)
     print(f"g_vec: {g_vec.shape}\n{g_vec}")
@@ -365,14 +365,14 @@ def vlstm_chunkwise_parallel_3(
         # m_H = torch.max(m_p_k, m_k)
 
         # max_state combined
-        m_state_combined = torch.maximum(m_p_k + m_k, m_log_D_k)
+        m_state_combined = torch.maximum(p_k + m_k, m_log_D_k)
 
         log_D_k_stabilized = log_D_k - m_state_combined
         D_k = torch.exp(log_D_k_stabilized)
         qk_k_matrix = q_chunk @ k_chunk.transpose(-2, -1)
         C_k_matrix = qk_k_matrix * D_k
 
-        q_chunk_gated = q_chunk * torch.exp(p_k - m_state_combined)
+        q_chunk_gated = q_chunk * torch.exp(p_k + m_k - m_state_combined)
         numerator_common = q_chunk_gated @ C_k + C_k_matrix @ v_chunk
 
         denom_common = q_chunk_gated @ n_k_inter.unsqueeze(-1) + C_k_matrix.sum(
