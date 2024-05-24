@@ -358,37 +358,52 @@ def vlstm_chunkwise_parallel_3(
         m_log_D_k = torch.max(log_D_k, dim=-1, keepdim=True).values
 
         # max_state inter
+        p_k = p_vec[:, :, i, :].unsqueeze(-1)
         m_p_k = p_vec_max[:, :, i]
-        m_H = torch.max(m_p_k, m_k)
+        # m_k
+
+        # m_H = torch.max(m_p_k, m_k)
 
         # max_state combined
-        m_state_combined = torch.maximum(m_log_D_k, m_H)
+        m_state_combined = torch.maximum(m_p_k + m_k, m_log_D_k)
 
-        log_D_k_stabilized = log_D_k - m_log_D_k
+        log_D_k_stabilized = log_D_k - m_state_combined
         D_k = torch.exp(log_D_k_stabilized)
         qk_k_matrix = q_chunk @ k_chunk.transpose(-2, -1)
         C_k_matrix = qk_k_matrix * D_k
 
-        denom_k_intra = torch.maximum(
-            C_k_matrix.sum(dim=-1, keepdim=True).abs(),
-            torch.exp(-m_log_D_k),
+        q_chunk_gated = q_chunk * torch.exp(p_k - m_state_combined)
+        numerator_common = q_chunk_gated @ C_k + C_k_matrix @ v_chunk
+
+        denom_common = q_chunk_gated @ n_k_inter.unsqueeze(-1) + C_k_matrix.sum(
+            dim=-1, keepdim=True
         )
-        C_k_matrix_normalized = C_k_matrix / denom_k_intra  # TODO add eps
-        H_intra = C_k_matrix_normalized @ v_chunk  # (B, NH, L, DH)
 
-        # H_inter
-        # ? Compute inter chunk contribution: H_inter
-        p_k = p_vec[:, :, i, :].clone()
-
-        q_chunk_gated = q_chunk * torch.exp(p_k).unsqueeze(-1)
-
-        denom_k_inter = torch.maximum(
-            torch.abs(q_chunk_gated @ n_k_inter.unsqueeze(-1)),
-            torch.exp(-m_k),
+        H_k_state = numerator_common / torch.maximum(
+            torch.abs(denom_common), torch.exp(-m_state_combined)
         )
-        H_inter = q_chunk_gated @ C_k / denom_k_inter
+        H_states[:, :, i, :, :] = H_k_state
 
-        # H_states[:, :, i, :, :] = (denom_k_inter / denom_k_intra) * H_inter + H_intra
-        H_states[:, :, i, :, :] = H_inter + H_intra
+        # OLD: H_intra
+        # denom_k_intra = torch.maximum(
+        #     C_k_matrix.sum(dim=-1, keepdim=True).abs(),
+        #     torch.exp(-m_log_D_k),
+        # )
+        # C_k_matrix_normalized = C_k_matrix / denom_k_intra  # TODO add eps
+        # H_intra = C_k_matrix_normalized @ v_chunk  # (B, NH, L, DH)
+
+        # OLD: H_inter
+        # # ? Compute inter chunk contribution: H_inter
+
+        # q_chunk_gated = q_chunk * torch.exp(p_k).unsqueeze(-1)
+
+        # denom_k_inter = torch.maximum(
+        #     torch.abs(q_chunk_gated @ n_k_inter.unsqueeze(-1)),
+        #     torch.exp(-m_k),
+        # )
+        # H_inter = q_chunk_gated @ C_k / denom_k_inter
+
+        # # H_states[:, :, i, :, :] = (denom_k_inter / denom_k_intra) * H_inter + H_intra
+        # H_states[:, :, i, :, :] = H_inter + H_intra
 
     return H_states
