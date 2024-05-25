@@ -49,7 +49,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
 #define SMEMARRAY(array, stride, row, col)                                     \
   array[(row) * (stride + SHARED_MEM_PADDING) + (col)]
 // SMEMVECTOR: access shared memory vector (1D)
-#define SMEMVECTOR(array, idx) array[(row) * (1 + SHARED_MEM_PADDING)]
+#define SMEMVECTOR(array, idx) array[(idx) * (1 + SHARED_MEM_PADDING)]
 
 #define DEBUG 1
 // #define DEBUG2 1
@@ -122,9 +122,16 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
 
   //? for input and forget gate
   // init iChunk (KVTileDim x 1) in shared memory for input gate
-  scalar_t *iChunk = (scalar_t *)&dTile[QtileDim * (1 + SHARED_MEM_PADDING)];
-  // TODO from here
-  //   scalar_t *
+  scalar_t *iChunk =
+      (scalar_t *)&dTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
+  // init fChunk (QTileDim x 1) in shared memory for forget gate
+  scalar_t *fChunk = (scalar_t *)&iChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
+  // init fTileCol (QTileDim x 1) in shared memory for forget gate (first column
+  // of the QtileDim x KVtileDim dTile)
+  float *fTileCol = (float *)&fChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  // init fTileColLast (1 x 1) in shared memory for forget gate (last row value
+  // of fTileCol)
+  float *fTileColLast = (float *)&fTileCol[QtileDim * (1 + SHARED_MEM_PADDING)];
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStep = seqLen * dimHeads;
@@ -146,6 +153,8 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
              batchHeadGridXGlobalMemIdx);
     }
 #endif
+    SMEMVECTOR(fTileColLast, 0) =
+        float2type<float>(0.0f); // could also just write 0.0f
 
     //! PARALLELIZE ALONG SEQLEN (gridDim.y)
     // Ends for looplevel 1:
@@ -230,6 +239,11 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
       }
       __syncthreads(); // TODO: necessary?
 
+      //! init fTileCol to fTileColLast
+      // TODO
+      //! fChunk Loading
+      // TODO
+
       // looplevel 2: loop over KVtile blocks along seqLen dim
       //! For causal computation: kvTileIdx <= qTileIdx * gridDim.y + blockIdx.y
       // other working version: kvTileIdx < kvTileEnd (inefficient due to
@@ -291,6 +305,12 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
           }
         }
         __syncthreads();
+
+        //! iChunk Loading
+        // TODO
+
+        //! construct dTile
+        // TODO
 
         //! compute C = Q x K^T, i.e. fill cTile
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
