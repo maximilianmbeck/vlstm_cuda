@@ -136,23 +136,29 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
   float *fTileColLast = (float *)&fTileCol[QtileDim * (1 + SHARED_MEM_PADDING)];
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
-  const uint batchHeadStep = seqLen * dimHeads;
+  const uint batchHeadStepQKV = seqLen * dimHeads;
+  const uint batchHeadStepIFgate = seqLen * 1;
   const uint numBatchHeads = batchSize * numHeads;
   // End for looplevel 0:
   const uint batchHeadEnd = CEIL_DIV(numBatchHeads, gridDim.x);
   // looplevel 0: loop over batches and heads
   for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd; ++batchHeadIdx) {
 
-    uint batchHeadGridXGlobalMemIdx =
-        (batchHeadStep * gridDim.x) * batchHeadIdx + (batchHeadStep)*blockIdx.x;
+    uint batchHeadGridXGlobalMemIdxQKV =
+        (batchHeadStepQKV * gridDim.x) * batchHeadIdx +
+        (batchHeadStepQKV)*blockIdx.x;
+    // TODO: from here
+    uint batchHeadGridXGlobalMemIdxIFgate =
+        (batchHeadStepIFgate * gridDim.x) * batchHeadIdx +
+        (batchHeadStepIFgate)*blockIdx.x;
 
 #ifdef DEBUG5
     if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
       printf("B<%d,%d> batchHeadIdx: %d, batchHeadEnd: %d, "
-             "batchHeadGridXGlobalMemIdx: "
+             "batchHeadGridXGlobalMemIdxQKV: "
              "%d\n",
              blockIdx.x, blockIdx.y, batchHeadIdx, batchHeadEnd,
-             batchHeadGridXGlobalMemIdx);
+             batchHeadGridXGlobalMemIdxQKV);
     }
 #endif
     SMEMVECTOR(fTileColLast, 0) =
@@ -164,13 +170,15 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
     // looplevel 1: loop over Qtile blocks along seqLen dim
     for (uint qTileIdx = 0; qTileIdx < qTileEnd; ++qTileIdx) {
 
+      //* qTile Global Memory Index
       // (grid&block) offset in Q matrix for qTile (global memory)
       const uint qTileGridXYGlobalMemIdx =
-          batchHeadGridXGlobalMemIdx +
+          batchHeadGridXGlobalMemIdxQKV +
           (dimHeads * QtileDim * gridDim.y) * qTileIdx;
       const uint qTileBlockGlobalMemIdx =
           qTileGridXYGlobalMemIdx + (dimHeads * QtileDim) * blockIdx.y;
 
+      //* cTile Global Memory Index (virtual, as never materialized fully)
       // (grid&block) offset Y-axis in C = Q*K^T matrix (along sequence
       // dimension) (used for checking causality)
       const uint cTileGridYIdx = QtileDim * gridDim.y * qTileIdx;
@@ -244,6 +252,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
       // flatten the threads to 1D
       const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
       //! init fTileCol to fTileColLast
+      //! fChunk Loading
       // fTileCol has only X dimension
       const uint fTileColXEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
       for (uint fTileColXIdx = 0; fTileColXIdx < fTileColXEnd; ++fTileColXIdx) {
@@ -253,12 +262,11 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
         if (fTileColThreadSharedMemXIdx < QtileDim) {
           SMEMVECTOR(fTileCol, fTileColThreadSharedMemXIdx) =
               SMEMVECTOR(fTileColLast, 0);
+
+          SMEMVECTOR(fChunk, fTileColThreadSharedMemXIdx) = 0.0f;
         }
       }
       __syncthreads();
-
-      //! fChunk Loading
-      // TODO
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
       //! For causal computation: kvTileIdx <= qTileIdx * gridDim.y +
@@ -273,7 +281,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
         // pointer to the respective memory space to load the k-tile and
         // v-tile).
         const uint kvTileBlockGlobalMemIdx =
-            batchHeadGridXGlobalMemIdx + (dimHeads * KVtileDim) * kvTileIdx;
+            batchHeadGridXGlobalMemIdxQKV + (dimHeads * KVtileDim) * kvTileIdx;
 
         // (grid&block) offset X-axis in C = Q*K^T matrix (along sequence
         // dimension) (used for checking causality)
@@ -559,7 +567,6 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matH, scalar_t *matQ,
                        cudaSharedmemCarveoutMaxShared);
   cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                        sharedMemorySize);
-  // TODO from here adapt arguments to also take fgate
   // define void* pointers to the kernel arguments
   void *kernelArgs[] = {(void *)&matH,        (void *)&matQ,
                         (void *)&matK,        (void *)&matV,
