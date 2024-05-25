@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 
-def vlstm_fw_torch(
+def vlstm_parallel_fw_torch(
     queries: torch.Tensor,
     keys: torch.Tensor,
     values: torch.Tensor,
@@ -98,7 +98,7 @@ def vlstm_fw_torch(
     return retrieved_values
 
 
-def vlstm_fwbw_torch(
+def vlstm_parallel_fwbw_torch(
     queries: torch.Tensor,
     keys: torch.Tensor,
     values: torch.Tensor,
@@ -107,12 +107,12 @@ def vlstm_fwbw_torch(
     stabilize_rowwise: bool = True,
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    return vLSTMFwBwFull.apply(
+    return vLSTMParallelFwBwFull.apply(
         queries, keys, values, igate_preact, fgate_preact, stabilize_rowwise, eps
     )
 
 
-class vLSTMFwBwFull(torch.autograd.Function):
+class vLSTMParallelFwBwFull(torch.autograd.Function):
 
     def forward(
         ctx,
