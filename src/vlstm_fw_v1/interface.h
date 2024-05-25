@@ -9,7 +9,8 @@ using torch::Tensor;
 
 namespace interface {
 
-Tensor vlstm_fw(Tensor mat_Q, Tensor mat_K, Tensor mat_V);
+Tensor vlstm_fw(Tensor mat_Q, Tensor mat_K, Tensor mat_V, Tensor iGatePreact,
+                Tensor fGatePreact);
 
 } // namespace interface
 
