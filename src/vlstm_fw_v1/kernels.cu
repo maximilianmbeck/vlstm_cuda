@@ -239,13 +239,28 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ,
       }
       __syncthreads(); // TODO: necessary?
 
+      // flatten the threads to 1D
+      const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
       //! init fTileCol to fTileColLast
-      // TODO
+      // fTileCol has only X dimension
+      const uint fTileColXEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+      for (uint fTileColXIdx = 0; fTileColXIdx < fTileColXEnd; ++fTileColXIdx) {
+        const uint fTileColThreadSharedMemXIdx =
+            flatThreadIdx + blockDim.x * blockDim.y * fTileColXIdx;
+
+        if (fTileColThreadSharedMemXIdx < QtileDim) {
+          SMEMVECTOR(fTileCol, fTileColThreadSharedMemXIdx) =
+              SMEMVECTOR(fTileColLast, 0);
+        }
+      }
+      __syncthreads();
+
       //! fChunk Loading
       // TODO
 
       // looplevel 2: loop over KVtile blocks along seqLen dim
-      //! For causal computation: kvTileIdx <= qTileIdx * gridDim.y + blockIdx.y
+      //! For causal computation: kvTileIdx <= qTileIdx * gridDim.y +
+      //! blockIdx.y
       // other working version: kvTileIdx < kvTileEnd (inefficient due to
       // loading of unnecessary numbers)
       const uint kvTileEnd = qTileIdx * gridDim.y + blockIdx.y + 1;
