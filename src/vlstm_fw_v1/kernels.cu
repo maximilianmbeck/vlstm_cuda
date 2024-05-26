@@ -147,7 +147,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
     uint batchHeadGridXGlobalMemIdxQKV =
         (batchHeadStepQKV * gridDim.x) * batchHeadIdx +
         (batchHeadStepQKV)*blockIdx.x;
-    // TODO: from here
+
     uint batchHeadGridXGlobalMemIdxIFgate =
         (batchHeadStepIFgate * gridDim.x) * batchHeadIdx +
         (batchHeadStepIFgate)*blockIdx.x;
@@ -177,6 +177,13 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
           (dimHeads * QtileDim * gridDim.y) * qTileIdx;
       const uint qTileBlockGlobalMemIdx =
           qTileGridXYGlobalMemIdx + (dimHeads * QtileDim) * blockIdx.y;
+
+      //* (grid&block) offset in f preactivations for fChunk (global memory)
+      const uint fChunkGridXYGlobalMemIdx =
+          batchHeadGridXGlobalMemIdxIFgate +
+          (1 * QtileDim * gridDim.y) * qTileIdx;
+      const uint fChunkBlockGlobalMemIdx =
+          fChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
 
       //* cTile Global Memory Index (virtual, as never materialized fully)
       // (grid&block) offset Y-axis in C = Q*K^T matrix (along sequence
@@ -249,21 +256,30 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
       }
       __syncthreads(); // TODO: necessary?
 
-      // flatten the threads to 1D
+      //? flatten the threads to 1D
       const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
+
       //! init fTileCol to fTileColLast
       //! fChunk Loading
-      // fTileCol has only X dimension
-      const uint fTileColXEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
-      for (uint fTileColXIdx = 0; fTileColXIdx < fTileColXEnd; ++fTileColXIdx) {
-        const uint fTileColThreadSharedMemXIdx =
-            flatThreadIdx + blockDim.x * blockDim.y * fTileColXIdx;
+      // Y: seqLen (or QtileDim), X: 1 (fTileCol has only Y dimension)
+      const uint fTileColChunkYEnd =
+          CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+      for (uint fTileColChunkYIdx = 0; fTileColChunkYIdx < fTileColChunkYEnd;
+           ++fTileColChunkYIdx) {
+        //? f idxes
+        //* shared memory:
+        const uint fThreadSharedMemYIdx =
+            flatThreadIdx + blockDim.x * blockDim.y * fTileColChunkYIdx;
+        //* global memory:
+        const uint fThreadGlobalMemIdx =
+            fChunkBlockGlobalMemIdx + fThreadSharedMemYIdx;
 
-        if (fTileColThreadSharedMemXIdx < QtileDim) {
-          SMEMVECTOR(fTileCol, fTileColThreadSharedMemXIdx) =
+        if (fThreadSharedMemYIdx < QtileDim) {
+          SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
               SMEMVECTOR(fTileColLast, 0);
 
-          SMEMVECTOR(fChunk, fTileColThreadSharedMemXIdx) = 0.0f;
+          SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
+              fGatePreact[fThreadGlobalMemIdx];
         }
       }
       __syncthreads();
@@ -276,17 +292,24 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
       const uint kvTileEnd = qTileIdx * gridDim.y + blockIdx.y + 1;
       for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
 
-        // offset in K&V matrix for kTile & vTile (global memory)
+        //* offset in K&V matrix for kTile & vTile (global memory)
         // (k-tile & v-tile have the same BlockGlobalMemIdx, we just change the
         // pointer to the respective memory space to load the k-tile and
         // v-tile).
         const uint kvTileBlockGlobalMemIdx =
             batchHeadGridXGlobalMemIdxQKV + (dimHeads * KVtileDim) * kvTileIdx;
 
-        // (grid&block) offset X-axis in C = Q*K^T matrix (along sequence
-        // dimension) (used for checking causality)
+        //* (grid&block) offset X-axis in C = Q*K^T matrix
+        // (along sequence dimension) (used for checking causality)
         const uint cTileGridXIdx = KVtileDim * kvTileIdx;
         const uint cTileBlockXIdx = cTileGridXIdx;
+
+        //* (grid&block) offset in i preactivations for iChunk (global memory)
+        const uint iChunkGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxIFgate +
+            (1 * KVtileDim * gridDim.y) * kvTileIdx;
+        const uint iChunkBlockGlobalMemIdx =
+            iChunkGridXYGlobalMemIdx + (1 * KVtileDim) * blockIdx.y;
 
         //! kTile & vTile Loading
         // loops over rows (outer) and columns (inner) of kTile & vTile
@@ -332,10 +355,27 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
         __syncthreads();
 
         //! iChunk Loading
-        // TODO
+        // Y: seqLen (or KVtileDim), X: 1
+        const uint iChunkChunkYEnd =
+            CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
+        for (uint iChunkYIdx = 0; iChunkYIdx < iChunkChunkYEnd; ++iChunkYIdx) {
+          //? i idxes
+          //* shared memory:
+          const uint iThreadSharedMemYIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * iChunkYIdx;
+          //* global memory:
+          const uint iThreadGlobalMemIdx =
+              iChunkBlockGlobalMemIdx + iThreadSharedMemYIdx;
+
+          if (iThreadSharedMemYIdx < KVtileDim) {
+            SMEMVECTOR(iChunk, iThreadSharedMemYIdx) =
+                iGatePreact[iThreadGlobalMemIdx];
+          }
+        }
+        __syncthreads();
 
         //! construct dTile
-        // TODO
+        // use all threads along Y (seqLen) dimension
 
         //! compute C = Q x K^T, i.e. fill cTile
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
