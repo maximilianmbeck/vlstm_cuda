@@ -178,12 +178,12 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
       const uint qTileBlockGlobalMemIdx =
           qTileGridXYGlobalMemIdx + (dimHeads * QtileDim) * blockIdx.y;
 
-      //* (grid&block) offset in f preactivations for fChunk (global memory)
-      const uint fChunkGridXYGlobalMemIdx =
-          batchHeadGridXGlobalMemIdxIFgate +
-          (1 * QtileDim * gridDim.y) * qTileIdx;
-      const uint fChunkBlockGlobalMemIdx =
-          fChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
+      //   // (grid&block) offset in f preactivations for fChunk (global memory)
+      //   //   const uint fChunkGridXYGlobalMemIdx =
+      //   //       batchHeadGridXGlobalMemIdxIFgate +
+      //   //       (1 * QtileDim * gridDim.y) * qTileIdx;
+      //   //   const uint fChunkBlockGlobalMemIdx =
+      //   //       fChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
 
       //* cTile Global Memory Index (virtual, as never materialized fully)
       // (grid&block) offset Y-axis in C = Q*K^T matrix (along sequence
@@ -260,7 +260,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
       const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
 
       //! init fTileCol to fTileColLast
-      //! fChunk Loading
+      //   // fChunk Loading
       // Y: seqLen (or QtileDim), X: 1 (fTileCol has only Y dimension)
       const uint fTileColChunkYEnd =
           CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
@@ -270,16 +270,18 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
         //* shared memory:
         const uint fThreadSharedMemYIdx =
             flatThreadIdx + blockDim.x * blockDim.y * fTileColChunkYIdx;
-        //* global memory:
-        const uint fThreadGlobalMemIdx =
-            fChunkBlockGlobalMemIdx + fThreadSharedMemYIdx;
+        // // //* global memory:
+        // // const uint fThreadGlobalMemIdx =
+        // //     fChunkBlockGlobalMemIdx + fThreadSharedMemYIdx;
 
         if (fThreadSharedMemYIdx < QtileDim) {
           SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
               SMEMVECTOR(fTileColLast, 0);
-
-          SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
-              fGatePreact[fThreadGlobalMemIdx];
+          //   // TODO apply log_simoid to the loaded fGatePreacts
+          // //   SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
+          // //       fGatePreact[fThreadGlobalMemIdx];
+          //   //   SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
+          //   //       logsigmoid_g(fGatePreact[fThreadGlobalMemIdx]);
         }
       }
       __syncthreads();
@@ -374,10 +376,152 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
         }
         __syncthreads();
 
-        //! construct dTile
-        // use all threads along Y (seqLen) dimension
+        //! construct fTileCol for dTile computation
+        // TODO maybe use a parallel scan for optimization (each thread
+        // basically does the same computation)
+        // fTileCol is the first column of
+        // the fgates for the current dTile use all threads along Y (seqLen,
+        // qTileDim) dimension to compute the sums of the forgetgates in
+        // parallel
 
-        //! compute C = Q x K^T, i.e. fill cTile
+        const uint dTileYEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+
+        if (kvTileIdx == 0) {
+          // we begin at seqLen position 0 in X direction
+          // we compute the cumulative sum of the forget gates per row position
+          // in the dTile
+
+          // loop chunkwise over the fGatePreacts up to the current qTile
+          // position
+          const uint fChunkEnd = gridDim.y * qTileIdx + blockIdx.y + 1;
+          // TODO optimize by setting the fChunkStartIdx properly
+          for (uint fChunkIdx = 0; fChunkIdx < fChunkEnd; ++fChunkIdx) {
+            //? f idxes
+            // load fChunk for fChunkIdx
+            //* (grid&block) offset in f preactivations for fChunk (global
+            // memory)
+            const uint fChunkGridXYGlobalMemIdx =
+                batchHeadGridXGlobalMemIdxIFgate +
+                (1 * QtileDim * gridDim.y) * fChunkIdx;
+            const uint fChunkBlockGlobalMemIdx =
+                fChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
+
+            //? loading fChunk into shared memory with threadblocks
+            const uint fWarpChunkEnd =
+                CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+            for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
+                 ++fWarpChunkIdx) {
+              //? f idxes
+              //* shared memory:
+              const uint fThreadSharedMemYIdx =
+                  flatThreadIdx + blockDim.x * blockDim.y * fWarpChunkIdx;
+              //* global memory:
+              const uint fThreadGlobalMemIdx =
+                  fChunkBlockGlobalMemIdx + fThreadSharedMemYIdx;
+
+              if (fThreadSharedMemYIdx < QtileDim) {
+                // TODO apply log_simoid to the loaded fGatePreacts
+                SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
+                    fGatePreact[fThreadGlobalMemIdx];
+                //   SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
+                //       logsigmoid_g(fGatePreact[fThreadGlobalMemIdx]);
+              }
+            }
+            __syncthreads();
+
+            //? sum up fgates for dTile
+            // the very first forgetgate index must be f_2
+            for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
+                 ++fWarpChunkIdx) {
+              //? f idxes
+              //* shared memory:
+              const uint fThreadSharedMemYIdx =
+                  flatThreadIdx + blockDim.x * blockDim.y * fWarpChunkIdx;
+
+              //? d idxes
+              //* (thread) offset Y-axis (seqLen, QTileDim) of dTile (global)
+              const uint dTileThreadYIdx =
+                  cTileBlockYIdx + fThreadSharedMemYIdx;
+
+              float f_acc;
+              if (fThreadSharedMemYIdx < QtileDim) {
+                // init forget gate accumulator
+                if (fWarpChunkIdx == 0) {
+                  f_acc = 0.0f;
+                } else {
+                  f_acc = SMEMVECTOR(fTileCol, fThreadSharedMemYIdx);
+                }
+
+                // start the sum at the second index (corresponds to f_2)
+                uint startIdx = 0;
+                if (fChunkIdx == 0) {
+                  startIdx = 1;
+                }
+                for (uint i = startIdx; i < QtileDim; ++i) {
+                  //? f idxes
+                  // fSumIdx corresponds to the current fGatePreact index
+                  // (starting from 0) i.e. for f_2: fSumIdx = 1, for f_3:
+                  // fSumIdx = 2, ...
+                  const uint fSumIdx = fChunkIdx * QtileDim + i;
+                  if (fSumIdx > dTileThreadYIdx) {
+                    break;
+                  }
+                  f_acc = add_g(f_acc, type2float(SMEMVECTOR(fChunk, i)));
+                }
+                SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = f_acc;
+              }
+            }
+            __syncthreads();
+          }
+
+          // todo sync grid?
+        } else {
+          // we are within the sequence at position > kvTileDim * kvTileIdx
+          // we can copy over the cumulative sum of the previous kvTile
+          // (iteration)
+          // TODO from here
+        }
+
+        //! construct dTile
+        // TODO: go over tile subtract fgates again, add igates
+        // TODO: while going over it compute the max state for the dTile
+        // // for (uint dTileYIdx = 0; dTileYIdx < dTileYEnd; ++dTileYIdx) {
+        // //   //? d idxes
+        // //   //* (thread) offset Y-axis (seqLen, QTileDim) WITHIN dTile
+        // (local)
+        // //   const uint dTileLocalThreadYIdx =
+        // //       flatThreadIdx + blockDim.x * blockDim.y * dTileYIdx;
+        // //   //* (thread) offset Y-axis (seqLen, QTileDim) of dTile
+        // //   // (global row idx in D matrix)
+        // //   const uint dTileThreadYIdx = cTileBlockYIdx +
+        // dTileLocalThreadYIdx;
+        // //   if (dTileLocalThreadYIdx < QtileDim) {
+        // //     if (dTileLocalThreadYIdx == 0) {
+        // //       SMEMVECTOR(fTileColLast, 0) = type2float(1.0f);
+        // //     } else {
+        // //       // TODO make more efficient later!
+        // //       // for now we
+        // //       // we will always use idx = 1 (corresponds to f_2) as
+        // start
+        // //       // index for the sum this means that we redo the same
+        // //       // computation many times later we will make this more
+        // efficient
+        // //       // and carry over previous computations
+
+        // //       // sum up fgates for dTile
+        // //       float f_acc = 0.0f;
+        // //       for (uint dTileXIdx = 0; dTileXIdx < KVtileDim;
+        // ++dTileXIdx) {
+        // //         f_acc =
+        // //             add_g(f_acc, type2float(SMEMVECTOR(fChunk,
+        // dTileXIdx)));
+        // //       }
+        // //     }
+        // //   }
+        // //   __syncthreads();
+        // // }
+
+        //! compute C = (Q x K^T) * dTile, i.e. fill cTile
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
         // loops over cTile rows (outer) and columns (inner)
         const uint cWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
@@ -438,6 +582,12 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
             __syncthreads();
           }
         }
+
+        //! compute "raw normalizer" l as rowsum of cTile
+        //! compute normalizer n as max(abs(l),exp(-m))
+        // TODO implement this
+
+        // TODO reweight the previous H tile
 
         //! compute H += C * V, i.e. fill hTile
         //! accumulate KVtiles to hTile
