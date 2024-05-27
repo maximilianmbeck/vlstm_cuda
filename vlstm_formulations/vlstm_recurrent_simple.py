@@ -51,12 +51,16 @@ def vlstm_recurrent_sequence_stabilized(
     hidden_states = []
     for t in range(S):
         # gates
-        fg, ig = fgate_preact[:, :, t, :], igate_preact[:, :, t, :]  # (B, NH, 1)
+        fg, ig = fgate_preact[:, :, t, :].unsqueeze(2), igate_preact[
+            :, :, t, :
+        ].unsqueeze(
+            2
+        )  # (B, NH, 1)
         # projections
         q, k, v = (
-            queries[:, :, t, :],
-            keys[:, :, t, :],
-            values[:, :, t, :],
+            queries[:, :, t, :].unsqueeze(2),
+            keys[:, :, t, :].unsqueeze(2),
+            values[:, :, t, :].unsqueeze(2),
         )  # (B, NH, DH)
 
         # step
@@ -95,25 +99,26 @@ def vlstm_recurrent_step_stabilized(
         c_state (torch.Tensor): (B, NH, DH, DH)
         n_state (torch.Tensor): (B, NH, DH, 1)
         m_state (torch.Tensor): (B, NH, 1, 1)
-        q (torch.Tensor): (B, NH, DH)
-        k (torch.Tensor): (B, NH, DH)
-        v (torch.Tensor): (B, NH, DH)
-        igate_preact (torch.Tensor): (B, NH, 1)
-        fgate_preact (torch.Tensor): (B, NH, 1)
+        q (torch.Tensor): (B, NH, 1, DH)
+        k (torch.Tensor): (B, NH, 1, DH)
+        v (torch.Tensor): (B, NH, 1, DH)
+        igate_preact (torch.Tensor): (B, NH, 1, 1)
+        fgate_preact (torch.Tensor): (B, NH, 1, 1)
 
     Returns:
         tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
             (hidden_state [B, NH, DH], (c_state_new [B, NH, DH, DH], n_state_new [B, NH, DH, 1]], m_state_new [B, NH, 1, 1]))
     """
-    B, NH, DH = q.shape
+    B, NH, S, DH = q.shape
     # projections
-    q, k, v = q.unsqueeze(-1), k.unsqueeze(-1), v.unsqueeze(-1)  # (B, NH, DH, 1)
+    q, k, v = (
+        q.squeeze_(2).unsqueeze(-1),
+        k.squeeze_(2).unsqueeze(-1),
+        v.squeeze_(2).unsqueeze(-1),
+    )  # (B, NH, DH, 1)
 
     # gates
-    fgate_preact = fgate_preact.unsqueeze(-1)  # (B, NH, 1, 1)
     log_fg_act = torch.nn.functional.logsigmoid(fgate_preact)
-
-    igate_preact = igate_preact.unsqueeze(-1)  # (B, NH, 1, 1)
 
     # update rule
     m_state_new = torch.max(log_fg_act + m_state, igate_preact)  # (B, NH, 1, 1)
