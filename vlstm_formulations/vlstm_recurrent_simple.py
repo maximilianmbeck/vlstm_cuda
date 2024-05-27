@@ -67,8 +67,8 @@ def vlstm_recurrent_sequence_stabilized(
             q=q,
             k=k,
             v=v,
-            ig=ig,
-            fg=fg,
+            igate_preact=ig,
+            fgate_preact=fg,
             eps=eps,
         )
         hidden_states.append(h)
@@ -84,8 +84,8 @@ def vlstm_recurrent_step_stabilized(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
-    ig: torch.Tensor,
-    fg: torch.Tensor,
+    igate_preact: torch.Tensor,
+    fgate_preact: torch.Tensor,
     eps: float = 1e-6,
     **kwargs,
 ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
@@ -98,8 +98,8 @@ def vlstm_recurrent_step_stabilized(
         q (torch.Tensor): (B, NH, DH)
         k (torch.Tensor): (B, NH, DH)
         v (torch.Tensor): (B, NH, DH)
-        ig (torch.Tensor): (B, NH, 1)
-        fg (torch.Tensor): (B, NH, 1)
+        igate_preact (torch.Tensor): (B, NH, 1)
+        fgate_preact (torch.Tensor): (B, NH, 1)
 
     Returns:
         tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
@@ -110,16 +110,16 @@ def vlstm_recurrent_step_stabilized(
     q, k, v = q.unsqueeze(-1), k.unsqueeze(-1), v.unsqueeze(-1)  # (B, NH, DH, 1)
 
     # gates
-    fg = fg.unsqueeze(-1)  # (B, NH, 1, 1)
-    log_fg_act = F.logsigmoid(fg)
+    fgate_preact = fgate_preact.unsqueeze(-1)  # (B, NH, 1, 1)
+    log_fg_act = torch.nn.functional.logsigmoid(fgate_preact)
 
-    ig = ig.unsqueeze(-1)  # (B, NH, 1, 1)
+    igate_preact = igate_preact.unsqueeze(-1)  # (B, NH, 1, 1)
 
     # update rule
-    m_state_new = torch.max(log_fg_act + m_state, ig)  # (B, NH, 1, 1)
+    m_state_new = torch.max(log_fg_act + m_state, igate_preact)  # (B, NH, 1, 1)
 
     fg_act = torch.exp(log_fg_act + m_state - m_state_new)  # (B, NH, 1, 1)
-    ig_act = torch.exp(ig - m_state_new)  # (B, NH, 1, 1)
+    ig_act = torch.exp(igate_preact - m_state_new)  # (B, NH, 1, 1)
 
     k_scaled = k / math.sqrt(DH)
 
