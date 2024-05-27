@@ -356,26 +356,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
         }
         __syncthreads();
 
-        //! iChunk Loading
-        // Y: seqLen (or KVtileDim), X: 1
-        const uint iChunkChunkYEnd =
-            CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
-        for (uint iChunkYIdx = 0; iChunkYIdx < iChunkChunkYEnd; ++iChunkYIdx) {
-          //? i idxes
-          //* shared memory:
-          const uint iThreadSharedMemYIdx =
-              flatThreadIdx + blockDim.x * blockDim.y * iChunkYIdx;
-          //* global memory:
-          const uint iThreadGlobalMemIdx =
-              iChunkBlockGlobalMemIdx + iThreadSharedMemYIdx;
-
-          if (iThreadSharedMemYIdx < KVtileDim) {
-            SMEMVECTOR(iChunk, iThreadSharedMemYIdx) =
-                iGatePreact[iThreadGlobalMemIdx];
-          }
-        }
-        __syncthreads();
-
         //! construct fTileCol for dTile computation
         // TODO maybe use a parallel scan for optimization (each thread
         // basically does the same computation)
@@ -384,8 +364,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
         // qTileDim) dimension to compute the sums of the forgetgates in
         // parallel
 
-        const uint dTileYEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
-
+        // end idx for the chunkwise loop over fGatePreacts with flattened
+        // thread block
+        const uint fWarpChunkEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
         if (kvTileIdx == 0) {
           // we begin at seqLen position 0 in X direction
           // we compute the cumulative sum of the forget gates per row position
@@ -407,8 +388,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
                 fChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
 
             //? loading fChunk into shared memory with threadblocks
-            const uint fWarpChunkEnd =
-                CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
             for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
                  ++fWarpChunkIdx) {
               //? f idxes
@@ -475,51 +454,90 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
           }
 
           // todo sync grid?
-        } else {
-          // we are within the sequence at position > kvTileDim * kvTileIdx
-          // we can copy over the cumulative sum of the previous kvTile
-          // (iteration)
-          // TODO from here
         }
+        // else: do nothing
+        // we are within the sequence at position > kvTileDim * kvTileIdx
+        // we can just use the fTileCol from the previous iteration and keep
+        // subtracting we only need to update the fTileCol for the next
+        // kvTileIdx at the end of the current kvTileIdx iteration
+
+        //! iChunk&fChunk Loading
+        // Y: seqLen (or KVtileDim), X: 1
+        // we only load the fGatePreacts for the current kvTileIdx
+        const uint iChunkChunkYEnd =
+            CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
+        for (uint iChunkYIdx = 0; iChunkYIdx < iChunkChunkYEnd; ++iChunkYIdx) {
+          //? i idxes
+          //* shared memory:
+          const uint iThreadSharedMemYIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * iChunkYIdx;
+          //* global memory:
+          const uint iThreadGlobalMemIdx =
+              iChunkBlockGlobalMemIdx + iThreadSharedMemYIdx;
+          //* (grid&block) offset in f preactivations for fChunk (global
+          // memory)
+          // TODO from here
+          // const uint fChunkGridXYGlobalMemIdx =
+          //     batchHeadGridXGlobalMemIdxIFgate +
+          //     (1 * QtileDim * gridDim.y) * TODO;
+          // const uint fChunkBlockGlobalMemIdx =
+          //     fChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
+
+          if (iThreadSharedMemYIdx < KVtileDim) {
+            SMEMVECTOR(iChunk, iThreadSharedMemYIdx) =
+                iGatePreact[iThreadGlobalMemIdx];
+            // SMEMVECTOR(fChunk, iThreadSharedMemYIdx)
+          }
+        }
+        __syncthreads();
 
         //! construct dTile
-        // TODO: go over tile subtract fgates again, add igates
-        // TODO: while going over it compute the max state for the dTile
-        // // for (uint dTileYIdx = 0; dTileYIdx < dTileYEnd; ++dTileYIdx) {
-        // //   //? d idxes
-        // //   //* (thread) offset Y-axis (seqLen, QTileDim) WITHIN dTile
-        // (local)
-        // //   const uint dTileLocalThreadYIdx =
-        // //       flatThreadIdx + blockDim.x * blockDim.y * dTileYIdx;
-        // //   //* (thread) offset Y-axis (seqLen, QTileDim) of dTile
-        // //   // (global row idx in D matrix)
-        // //   const uint dTileThreadYIdx = cTileBlockYIdx +
-        // dTileLocalThreadYIdx;
-        // //   if (dTileLocalThreadYIdx < QtileDim) {
-        // //     if (dTileLocalThreadYIdx == 0) {
-        // //       SMEMVECTOR(fTileColLast, 0) = type2float(1.0f);
-        // //     } else {
-        // //       // TODO make more efficient later!
-        // //       // for now we
-        // //       // we will always use idx = 1 (corresponds to f_2) as
-        // start
-        // //       // index for the sum this means that we redo the same
-        // //       // computation many times later we will make this more
-        // efficient
-        // //       // and carry over previous computations
+        // go over tile from left to right in kvTileDim dimension, subtract
+        // fgates again, add igates while going over it compute the max state
+        // for the dTile (keep max in register and copy to shared memory at the
+        // end)
 
-        // //       // sum up fgates for dTile
-        // //       float f_acc = 0.0f;
-        // //       for (uint dTileXIdx = 0; dTileXIdx < KVtileDim;
-        // ++dTileXIdx) {
-        // //         f_acc =
-        // //             add_g(f_acc, type2float(SMEMVECTOR(fChunk,
-        // dTileXIdx)));
-        // //       }
-        // //     }
-        // //   }
-        // //   __syncthreads();
-        // // }
+        for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
+             ++fWarpChunkIdx) {
+          //? f idxes
+          //* shared memory:
+          const uint fThreadSharedMemYIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * fWarpChunkIdx;
+
+          //? d idxes
+          //* (thread) [local] offset Y-axis (seqLen, QTileDim) of dTile
+          const uint dTileLocalThreadYIdx = fThreadSharedMemYIdx;
+          //* (thread) [global] offset Y-axis (seqLen, QTileDim) of dTile
+          const uint dTileThreadYIdx = cTileBlockYIdx + dTileLocalThreadYIdx;
+
+          if (fThreadSharedMemYIdx < QtileDim) {
+            //* (thread) [local] offset X-axis (KVtileDim) of dTile
+            const uint dTileLocalThreadXIdx = kvTileIdx;
+
+            float f_acc_subtractfrom =
+                SMEMVECTOR(fTileCol, fThreadSharedMemYIdx);
+            float f_max = f_acc_subtractfrom;
+            for (uint i = 0; i < KVtileDim; ++i) {
+              //* (thread) [global] offset X-axis (KVtileDim) of dTile
+              const uint dTileThreadXIdx = cTileBlockXIdx + i;
+
+              // f gate only
+              if (dTileThreadXIdx == dTileThreadYIdx) {
+                // set to 1
+              } else if (dTileThreadXIdx > dTileThreadYIdx) {
+                // set to negative infinity
+              } else {
+                // dTileThreadXIdx < dTileThreadYIdx
+                // subtract f gate
+              }
+
+              // with i gate value
+
+              // max state
+            }
+          }
+        }
+        __syncthreads();
 
         //! compute C = (Q x K^T) * dTile, i.e. fill cTile
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
@@ -588,6 +606,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
         // TODO implement this
 
         // TODO reweight the previous H tile
+
+        //! DEBUG only: write cTile to global memory
+        // TODO
 
         //! compute H += C * V, i.e. fill hTile
         //! accumulate KVtiles to hTile
