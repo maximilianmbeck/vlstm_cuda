@@ -92,8 +92,8 @@ def vlstm_recurrent_step_stabilized(
     """This is a single step of the mLSTM operation in recurrent form.
 
     Args:
-        s_state (torch.Tensor): (B, NH, DH, DH)
-        z_state (torch.Tensor): (B, NH, DH, 1)
+        c_state (torch.Tensor): (B, NH, DH, DH)
+        n_state (torch.Tensor): (B, NH, DH, 1)
         m_state (torch.Tensor): (B, NH, 1, 1)
         q (torch.Tensor): (B, NH, DH)
         k (torch.Tensor): (B, NH, DH)
