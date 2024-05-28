@@ -43,6 +43,6 @@ def vlstm_fw_cuda(
     igate_preact = igate_preact.contiguous()
     fgate_preact = fgate_preact.contiguous()
 
-    out = cppmodule.vlstm_fw(mat_Q, mat_K, mat_V, igate_preact, fgate_preact)
+    out, mat_C = cppmodule.vlstm_fw(mat_Q, mat_K, mat_V, igate_preact, fgate_preact)
 
-    return out
+    return out, mat_C

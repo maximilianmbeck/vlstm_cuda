@@ -29,8 +29,8 @@ namespace cg = cooperative_groups;
 namespace kernels {
 
 template <typename scalar_t, int TblockDim, int QblockDim, int KVblockDim>
-__global__ void vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
-                         scalar_t *matV, scalar_t *iGatePreact,
+__global__ void vlstm_fw(scalar_t *matH, scalar_t *matC, scalar_t *matQ,
+                         scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
                          scalar_t *fGatePreact, int batchSize, int numHeads,
                          int seqLen, int dimHeads);
 
@@ -61,17 +61,19 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
 
 /**
 Conventions:
-// TODO add conventions
+- chunk: A 1D vector in shared memory
+- tile: A 2D matrix in shared memory
 
 */
 
 /* vLSTM Forward Kernel v0 */
 
 template <typename scalar_t, int TblockDim, int QtileDim, int KVtileDim>
-__global__ void
-kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
-                  scalar_t *matV, scalar_t *iGatePreact, scalar_t *fGatePreact,
-                  int batchSize, int numHeads, int seqLen, int dimHeads) {
+__global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
+                                  scalar_t *matQ, scalar_t *matK,
+                                  scalar_t *matV, scalar_t *iGatePreact,
+                                  scalar_t *fGatePreact, int batchSize,
+                                  int numHeads, int seqLen, int dimHeads) {
   // int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
@@ -616,8 +618,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
 
         // TODO reweight the previous H tile
 
-        //! DEBUG only: write cTile to global memory
-        // TODO
+        //! DEBUG only: write dTile to global memory
+        // TODO from here
 
         //! compute H += C * V, i.e. fill hTile
         //! accumulate KVtiles to hTile
@@ -703,12 +705,10 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *matQ, scalar_t *matK,
 }
 
 template <typename scalar_t>
-void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matH, scalar_t *matQ,
-                                           scalar_t *matK, scalar_t *matV,
-                                           scalar_t *iGatePreact,
-                                           scalar_t *fGatePreact, int batchSize,
-                                           int numHeads, int seqLen,
-                                           int dimHeads) {
+void kernel_dispatchers::vlstm_fw_dispatch(
+    scalar_t *matH, scalar_t *matC, scalar_t *matQ, scalar_t *matK,
+    scalar_t *matV, scalar_t *iGatePreact, scalar_t *fGatePreact, int batchSize,
+    int numHeads, int seqLen, int dimHeads) {
   printf("B: %d, NH: %d, S: %d, DH: %d\n", batchSize, numHeads, seqLen,
          dimHeads);
   const int TblockDim = TBLOCK_DIM; // matmul blockdim
@@ -795,11 +795,11 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matH, scalar_t *matQ,
   cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
                        sharedMemorySize);
   // define void* pointers to the kernel arguments
-  void *kernelArgs[] = {(void *)&matH,        (void *)&matQ,
-                        (void *)&matK,        (void *)&matV,
-                        (void *)&iGatePreact, (void *)&fGatePreact,
-                        (void *)&batchSize,   (void *)&numHeads,
-                        (void *)&seqLen,      (void *)&dimHeads};
+  void *kernelArgs[] = {
+      (void *)&matH,        (void *)&matC,      (void *)&matQ,
+      (void *)&matK,        (void *)&matV,      (void *)&iGatePreact,
+      (void *)&fGatePreact, (void *)&batchSize, (void *)&numHeads,
+      (void *)&seqLen,      (void *)&dimHeads};
 
   cudaLaunchCooperativeKernel((void *)kernel, gridDims, blockDims, kernelArgs,
                               sharedMemorySize, stream);
@@ -816,14 +816,17 @@ void kernel_dispatchers::vlstm_fw_dispatch(scalar_t *matH, scalar_t *matQ,
 
 // this is needed to make sure that the compiler instantiates the template
 template void kernel_dispatchers::vlstm_fw_dispatch<__nv_bfloat16>(
-    __nv_bfloat16 *matH, __nv_bfloat16 *matQ, __nv_bfloat16 *matK,
-    __nv_bfloat16 *matV, __nv_bfloat16 *iGatePreact, __nv_bfloat16 *fGatePreact,
-    int batchSize, int numHeads, int seqLen, int dimHeads);
+    __nv_bfloat16 *matH, __nv_bfloat16 *matC, __nv_bfloat16 *matQ,
+    __nv_bfloat16 *matK, __nv_bfloat16 *matV, __nv_bfloat16 *iGatePreact,
+    __nv_bfloat16 *fGatePreact, int batchSize, int numHeads, int seqLen,
+    int dimHeads);
 template void kernel_dispatchers::vlstm_fw_dispatch<__half>(
-    __half *matH, __half *matQ, __half *matK, __half *matV, __half *iGatePreact,
-    __half *fGatePreact, int batchSize, int numHeads, int seqLen, int dimHeads);
+    __half *matH, __half *matC, __half *matQ, __half *matK, __half *matV,
+    __half *iGatePreact, __half *fGatePreact, int batchSize, int numHeads,
+    int seqLen, int dimHeads);
 template void kernel_dispatchers::vlstm_fw_dispatch<float>(
-    float *matH, float *matQ, float *matK, float *matV, float *iGatePreact,
-    float *fGatePreact, int batchSize, int numHeads, int seqLen, int dimHeads);
+    float *matH, float *matC, float *matQ, float *matK, float *matV,
+    float *iGatePreact, float *fGatePreact, int batchSize, int numHeads,
+    int seqLen, int dimHeads);
 
 } // namespace vlstm
