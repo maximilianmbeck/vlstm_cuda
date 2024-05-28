@@ -154,6 +154,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStepQKV = seqLen * dimHeads;
   const uint batchHeadStepIFgate = seqLen * 1;
+  const uint batchHeadStepCD = seqLen * seqLen;
   const uint numBatchHeads = batchSize * numHeads;
   // End for looplevel 0:
   const uint batchHeadEnd = CEIL_DIV(numBatchHeads, gridDim.x);
@@ -167,6 +168,10 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
     uint batchHeadGridXGlobalMemIdxIFgate =
         (batchHeadStepIFgate * gridDim.x) * batchHeadIdx +
         (batchHeadStepIFgate)*blockIdx.x;
+
+    uint batchHeadGridXGlobalMemIdxCD =
+        (batchHeadStepCD * gridDim.x) * batchHeadIdx +
+        (batchHeadStepCD)*blockIdx.x;
 
 #ifdef DEBUG5
     if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
@@ -199,6 +204,13 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
       // dimension) (used for checking causality)
       const uint cTileGridYIdx = QtileDim * gridDim.y * qTileIdx;
       const uint cTileBlockYIdx = cTileGridYIdx + QtileDim * blockIdx.y;
+
+      //* cdTile Global Memory Index (Debug only)
+      const uint cdTileGridXYGlobalMemIdx =
+          batchHeadGridXGlobalMemIdxCD +
+          (seqLen * QtileDim * gridDim.y) * qTileIdx;
+      const uint cdTileBlockGlobalMemIdx =
+          cdTileGridXYGlobalMemIdx + (seqLen * QtileDim) * blockIdx.y;
 
 #ifdef DEBUG5
       if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
@@ -619,7 +631,33 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
         // TODO reweight the previous H tile
 
         //! DEBUG only: write dTile to global memory
-        // TODO from here
+        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+             ++cdWarpTileYIdx) {
+          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+               ++cdWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpTileThreadSharedMemYIdx =
+                blockDim.y * cdWarpTileYIdx + threadIdx.y;
+            const uint cdWarpTileThreadSharedMemXIdx =
+                blockDim.x * cdWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            // left upper corner of cWarpTileBlock in C (global memory)
+            const uint cdWarpTileBlockGlobalMemIdx =
+                cdTileBlockGlobalMemIdx + KVtileDim * kvTileIdx +
+                (KVtileDim * blockDim.y) * cdWarpTileYIdx +
+                blockDim.x * cdWarpTileXIdx;
+            const uint cdWarpTileThreadGlobalMemIdx =
+                cdWarpTileBlockGlobalMemIdx + KVtileDim * threadIdx.y +
+                threadIdx.x;
+
+            matC[cdWarpTileThreadGlobalMemIdx] =
+                SMEMARRAY(dTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                          cdWarpTileThreadSharedMemXIdx);
+          }
+        }
 
         //! compute H += C * V, i.e. fill hTile
         //! accumulate KVtiles to hTile

@@ -164,7 +164,11 @@ def vlstm_fw_torch_ref(
     _dtype, _device = queries.dtype, queries.device
 
     # forget gate matrix
-    log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
+    # log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
+    log_fgates = (
+        fgate_preact  # (B, NH, S, 1) #! We do not apply sigmoid here for debugging
+    )
+
     ltr = torch.tril(
         torch.ones(
             (S, S),
@@ -215,4 +219,4 @@ def vlstm_fw_torch_ref(
 
     # retrieved values
     retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
-    return retrieved_values, max_log_D, l
+    return retrieved_values, max_log_D, l, log_D_matrix
