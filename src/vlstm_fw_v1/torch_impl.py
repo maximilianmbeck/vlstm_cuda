@@ -201,7 +201,8 @@ def vlstm_fw_torch_ref(
     )  # (B, NH, S, S)
 
     # gate decay matrix D (combination of forget gate and input gate)
-    log_D_matrix = log_fg_matrix + igate_preact.transpose(-2, -1)  # (B, NH, S, S)
+    # log_D_matrix = log_fg_matrix + igate_preact.transpose(-2, -1)  # (B, NH, S, S)
+    log_D_matrix = log_fg_matrix  # (B, NH, S, S)
     # D matrix stabilization
     max_log_D, _ = torch.max(log_D_matrix, dim=-1, keepdim=True)  # (B, NH, S, 1)
     log_D_matrix_stabilized = log_D_matrix - max_log_D  # (B, NH, S, S)
