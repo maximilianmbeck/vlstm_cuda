@@ -58,6 +58,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *matC, scalar_t *matQ,
 // #define DEBUG3 1
 // #define DEBUG4 1
 // #define DEBUG5 1
+#define DEBUG6 1
 
 /**
 Conventions:
@@ -222,28 +223,12 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
       }
 #endif
 
-#ifdef DEBUG2
-      if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
-          (threadIdx.y == 0)) {
-        printf("qTileIdx=%d: qTileEnd: %d, qTileGridXYGlobalMemIdx: %d, "
-               "qTileBlockGlobalMemIdx: %d\n",
-               qTileIdx, qTileEnd, qTileGridXYGlobalMemIdx,
-               qTileBlockGlobalMemIdx);
-      }
-#endif
       //! qTile Loading
       // loops over rows (outer) and columns (inner) of qTile
       const uint qWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
       const uint qWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
       for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
            ++qWarpTileYIdx) {
-#ifdef DEBUG2
-        if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
-            (threadIdx.y == 0)) {
-          printf("qWarpTileYIdx=%d: qWarpTileYEnd: %d, qWarpTileXEnd: %d\n",
-                 qWarpTileYIdx, qWarpTileYEnd, qWarpTileXEnd);
-        }
-#endif
         for (uint qWarpTileXIdx = 0; qWarpTileXIdx < qWarpTileXEnd;
              ++qWarpTileXIdx) {
           //? qWarpTileIdxes
@@ -382,6 +367,13 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
           const uint fChunkEnd = gridDim.y * qTileIdx + blockIdx.y + 1;
           // TODO optimize by setting the fChunkStartIdx properly
           for (uint fChunkIdx = 0; fChunkIdx < fChunkEnd; ++fChunkIdx) {
+#ifdef DEBUG6
+            if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+                (threadIdx.y == 0)) {
+              printf("qTileIdx=%d, fChunkIdx=%d: fChunkEnd: %d\n", qTileIdx,
+                     fChunkIdx, fChunkEnd);
+            }
+#endif
             //? f idxes
             // load fChunk for fChunkIdx
             //* (grid&block) offset in f preactivations for fChunk (global
@@ -452,12 +444,24 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                   }
                   f_acc = add_g(f_acc, type2float(SMEMVECTOR(fChunk, i)));
                 }
-                SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = f_acc;
+                if (fChunkIdx == 0) {
+                  SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = f_acc;
+                } else {
+                  SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
+                      add_g(SMEMVECTOR(fTileCol, fThreadSharedMemYIdx), f_acc);
+                }
               }
+#ifdef DEBUG6
+              if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                  (flatThreadIdx < 8)) {
+                printf("qTileIdx=%d, flatThreadIdx=%d: fTileCol=%f\n", qTileIdx,
+                       flatThreadIdx,
+                       SMEMVECTOR(fTileCol, fThreadSharedMemYIdx));
+              }
+#endif
             }
             __syncthreads();
           }
-
           // todo sync grid?
         }
         // else: do nothing
@@ -769,8 +773,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const dim3 gridDims(batchSize * numHeads, 2);
-  // const dim3 gridDims(1, 1);
+  // const dim3 gridDims(batchSize * numHeads, 2);
+  const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size
   // TODO understand how memory padding works!
