@@ -59,6 +59,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *matC, scalar_t *matQ,
 // #define DEBUG4 1
 // #define DEBUG5 1
 #define DEBUG6 1
+// #define DEBUG7 1
 
 /**
 Conventions:
@@ -367,22 +368,23 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
           const uint fChunkEnd = gridDim.y * qTileIdx + blockIdx.y + 1;
           // TODO optimize by setting the fChunkStartIdx properly
           for (uint fChunkIdx = 0; fChunkIdx < fChunkEnd; ++fChunkIdx) {
-#ifdef DEBUG6
-            if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
-                (threadIdx.y == 0)) {
-              printf("qTileIdx=%d, fChunkIdx=%d: fChunkEnd: %d\n", qTileIdx,
-                     fChunkIdx, fChunkEnd);
-            }
-#endif
+            // #ifdef DEBUG6
+            //             if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+            //             (threadIdx.x == 0) &&
+            //                 (threadIdx.y == 0)) {
+            //               printf("qTileIdx=%d, fChunkIdx=%d: fChunkEnd:
+            //               %d\n", qTileIdx,
+            //                      fChunkIdx, fChunkEnd);
+            //             }
+            // #endif
             //? f idxes
             // load fChunk for fChunkIdx
             //* (grid&block) offset in f preactivations for fChunk (global
             // memory)
             const uint fChunkGridXYGlobalMemIdx =
-                batchHeadGridXGlobalMemIdxIFgate +
-                (1 * QtileDim * gridDim.y) * fChunkIdx;
+                batchHeadGridXGlobalMemIdxIFgate + (1 * QtileDim) * fChunkIdx;
             const uint fChunkBlockGlobalMemIdx =
-                fChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
+                fChunkGridXYGlobalMemIdx; //+ (1 * QtileDim) * blockIdx.y;
 
             //? loading fChunk into shared memory with threadblocks
             for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
@@ -402,6 +404,20 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                 //   SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
                 //       logsigmoid_g(fGatePreact[fThreadGlobalMemIdx]);
               }
+              // #ifdef DEBUG7
+              //               if ((blockIdx.x == 0) && (blockIdx.y == 1) &&
+              //                   (flatThreadIdx == 6)) {
+              //                 printf("qTileIdx=%d, fChunkIdx=%d (<%d),
+              //                 blockIdx.y=%d, "
+              //                        "flatThreadIdx=%d: "
+              //                        "fSumIdx=%d, dTileThreadYIdx=%d,
+              //                        f_acc=%f, fg(%d)=%f\n", qTileIdx,
+              //                        fChunkIdx, fChunkEnd, blockIdx.y,
+              //                        flatThreadIdx, fSumIdx, dTileThreadYIdx,
+              //                        f_acc, i, type2float(SMEMVECTOR(fChunk,
+              //                        i)));
+              //               }
+              // #endif
             }
             __syncthreads();
 
@@ -422,7 +438,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
               float f_acc;
               if (fThreadSharedMemYIdx < QtileDim) {
                 // init forget gate accumulator
-                if (fWarpChunkIdx == 0) {
+                if (fChunkIdx == 0) {
                   f_acc = 0.0f;
                 } else {
                   f_acc = SMEMVECTOR(fTileCol, fThreadSharedMemYIdx);
@@ -443,18 +459,34 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                     break;
                   }
                   f_acc = add_g(f_acc, type2float(SMEMVECTOR(fChunk, i)));
+#ifdef DEBUG7
+                  if ((blockIdx.x == 0) && (blockIdx.y == 1) &&
+                      (flatThreadIdx == 6)) {
+                    printf(
+                        "qTileIdx=%d, fChunkIdx=%d (<%d), blockIdx.y=%d, "
+                        "flatThreadIdx=%d: "
+                        "fSumIdx=%d, dTileThreadYIdx=%d, f_acc=%f, fg(%d)=%f\n",
+                        qTileIdx, fChunkIdx, fChunkEnd, blockIdx.y,
+                        flatThreadIdx, fSumIdx, dTileThreadYIdx, f_acc, i,
+                        type2float(SMEMVECTOR(fChunk, i)));
+                  }
+#endif
                 }
-                if (fChunkIdx == 0) {
-                  SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = f_acc;
-                } else {
-                  SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
-                      add_g(SMEMVECTOR(fTileCol, fThreadSharedMemYIdx), f_acc);
-                }
+                // if (fChunkIdx == 0) {
+                SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = f_acc;
+                // } else {
+                //   SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
+                //       add_g(SMEMVECTOR(fTileCol, fThreadSharedMemYIdx),
+                //       f_acc);
+                // }
               }
 #ifdef DEBUG6
-              if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+              if ((blockIdx.x == 0) && (blockIdx.y <= 1) &&
                   (flatThreadIdx < 8)) {
-                printf("qTileIdx=%d, flatThreadIdx=%d: fTileCol=%f\n", qTileIdx,
+                printf("qTileIdx=%d, fChunkIdx=%d (<%d), blockIdx.y=%d, "
+                       "flatThreadIdx=%d: "
+                       "fTileCol=%f\n",
+                       qTileIdx, fChunkIdx, fChunkEnd, blockIdx.y,
                        flatThreadIdx,
                        SMEMVECTOR(fTileCol, fThreadSharedMemYIdx));
               }
