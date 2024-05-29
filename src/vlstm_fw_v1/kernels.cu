@@ -59,15 +59,16 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *matC, scalar_t *matQ,
 // #define DEBUG3 1
 // #define DEBUG4 1
 // #define DEBUG5 1
-// #define DEBUG6 1
+// #define DEBUG6 1 // print fTileCol vals
 // #define DEBUG7 1
-#define DEBUG8 1
+// #define DEBUG8 1
+// #define DEBUG9 1
+// #define DEBUG10 1
 
 /**
 Conventions:
 - chunk: A 1D vector in shared memory
 - tile: A 2D matrix in shared memory
-
 */
 
 /* vLSTM Forward Kernel v0 */
@@ -209,12 +210,12 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
       const uint cTileGridYIdx = QtileDim * gridDim.y * qTileIdx;
       const uint cTileBlockYIdx = cTileGridYIdx + QtileDim * blockIdx.y;
 
-      //* cdTile Global Memory Index (Debug only)
-      const uint cdTileGridXYGlobalMemIdx =
-          batchHeadGridXGlobalMemIdxCD +
-          (seqLen * QtileDim * gridDim.y) * qTileIdx;
-      const uint cdTileBlockGlobalMemIdx =
-          cdTileGridXYGlobalMemIdx + (seqLen * QtileDim) * blockIdx.y;
+      //   //* cdTile Global Memory Index (Debug only)
+      //   const uint cdTileGridXYGlobalMemIdx =
+      //       batchHeadGridXGlobalMemIdxCD +
+      //       (seqLen * QtileDim * gridDim.y) * qTileIdx;
+      //   const uint cdTileBlockGlobalMemIdx =
+      //       cdTileGridXYGlobalMemIdx + (seqLen * QtileDim) * blockIdx.y;
 
 #ifdef DEBUG5
       if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
@@ -505,7 +506,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
         // kvTileIdx at the end of the current kvTileIdx iteration
 
         // only do this for lower triangular part of the d matrix
-        if (cTileBlockXIdx <= cTileBlockYIdx) {
+        if (true) {
 #ifdef DEBUG8
           if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx == 0)) {
             printf("qTileIdx=%d, kvTileIdx=%d, cTileBlockXIdx=%d, "
@@ -601,6 +602,16 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                 // write d_val into dTile shared memory
                 SMEMARRAY(dTile, KVtileDim, dTileLocalThreadYIdx, i) =
                     float2type<scalar_t>(d_val);
+#ifdef DEBUG9
+                if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                    (flatThreadIdx == 7)) {
+                  printf("qTileIdx=%d, kvTileIdx=%d, cTileBlockXIdx=%d, "
+                         "cTileBlockYIdx=%d, dTileThreadXYIdx=(%d,%d), "
+                         "d_val=%f\n",
+                         qTileIdx, kvTileIdx, cTileBlockXIdx, cTileBlockYIdx,
+                         dTileThreadXIdx, dTileThreadYIdx, d_val);
+                }
+#endif
               }
               // save max state of dTile in shared memory
               SMEMVECTOR(mChunk, dTileLocalThreadYIdx) = d_max;
@@ -612,9 +623,14 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
 
           //! DEBUG only: write dTile to global memory
           // left upper corner of cWarpTileBlock in C (global memory)
-          const uint cdTileGlobalMemIdx = cdTileBlockGlobalMemIdx +
-                                          seqLen * cTileBlockYIdx +
-                                          cTileBlockXIdx;
+          //* cdTile Global Memory Index (Debug only)
+          const uint cdTileGridXYGlobalMemIdx =
+              batchHeadGridXGlobalMemIdxCD +
+              (seqLen * QtileDim * gridDim.y) * qTileIdx;
+          const uint cdTileBlockGlobalMemIdx =
+              cdTileGridXYGlobalMemIdx + (seqLen * QtileDim) * blockIdx.y +
+              (kvTileIdx * KVtileDim);
+
           const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
           const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
           for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
@@ -629,6 +645,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                   blockDim.x * cdWarpTileXIdx + threadIdx.x;
               //* global memory:
               const uint cdWarpTileBlockGlobalMemIdx =
+                  cdTileBlockGlobalMemIdx +
                   (seqLen * blockDim.y) * cdWarpTileYIdx +
                   blockDim.x * cdWarpTileXIdx;
               const uint cdWarpTileThreadGlobalMemIdx =
@@ -638,6 +655,20 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
               matC[cdWarpTileThreadGlobalMemIdx] =
                   SMEMARRAY(dTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
                             cdWarpTileThreadSharedMemXIdx);
+#ifdef DEBUG10
+              if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                  (threadIdx.x == 0 && threadIdx.y == 0)) {
+                printf("qTileIdx=%d, kvTileIdx=%d, cTileBlockXIdx=%d, "
+                       "cTileBlockYIdx=%d, dTileThreadXYIdx=(%d,%d), "
+                       "d_val=%f\n",
+                       qTileIdx, kvTileIdx, cTileBlockXIdx, cTileBlockYIdx,
+                       cdWarpTileThreadSharedMemXIdx,
+                       cdWarpTileThreadSharedMemYIdx,
+                       type2float(SMEMARRAY(dTile, KVtileDim,
+                                            cdWarpTileThreadSharedMemYIdx,
+                                            cdWarpTileThreadSharedMemXIdx)));
+              }
+#endif
             }
           }
         }
@@ -819,8 +850,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  // const dim3 gridDims(batchSize * numHeads, 2);
-  const dim3 gridDims(1, 1);
+  const dim3 gridDims(batchSize * numHeads, 2);
+  //   const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size
   // TODO understand how memory padding works!
