@@ -143,7 +143,7 @@ template <typename T> __device__ __forceinline__ T tanh_g(const T x) {
 }
 
 template <typename T> __device__ __forceinline__ T log_g(const T x) {
-  return log(x);
+  return log_g(x);
 }
 
 template <> __device__ __forceinline__ float log_g(const float x) {
