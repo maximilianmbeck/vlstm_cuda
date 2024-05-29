@@ -401,11 +401,11 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                   fChunkBlockGlobalMemIdx + fThreadSharedMemYIdx;
 
               if (fThreadSharedMemYIdx < QtileDim) {
-                // TODO apply log_simoid to the loaded fGatePreacts
                 SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
-                    fGatePreact[fThreadGlobalMemIdx];
-                //   SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
-                //       logsigmoid_g(fGatePreact[fThreadGlobalMemIdx]);
+                    logsigmoid_g(fGatePreact[fThreadGlobalMemIdx]);
+                // without logsigmoid for debugging only:
+                // SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
+                //     fGatePreact[fThreadGlobalMemIdx];
               }
               // #ifdef DEBUG7
               //               if ((blockIdx.x == 0) && (blockIdx.y == 1) &&
@@ -540,7 +540,10 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
               SMEMVECTOR(iChunk, ifThreadSharedMemYIdx) =
                   iGatePreact[ifChunkThreadGlobalMemIdx];
               SMEMVECTOR(fChunk, ifThreadSharedMemYIdx) =
-                  fGatePreact[ifChunkThreadGlobalMemIdx];
+                  logsigmoid_g(fGatePreact[ifChunkThreadGlobalMemIdx]);
+              // without logsigmoid for debugging only:
+              //   SMEMVECTOR(fChunk, ifThreadSharedMemYIdx) =
+              //       fGatePreact[ifChunkThreadGlobalMemIdx];
             }
           }
           __syncthreads();
@@ -591,10 +594,9 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                                              type2float(SMEMVECTOR(fChunk, i)));
                 }
                 // d_val;
-                d_val =
-                    f_acc_subtractfrom; // TODO change to this
-                                        // add_g(f_acc_subtractfrom,
-                                        // type2float(SMEMVECTOR(iChunk, i)));
+                // d_val = f_acc_subtractfrom; // f_gate only for debugging
+                d_val = add_g(f_acc_subtractfrom,
+                              type2float(SMEMVECTOR(iChunk, i)));
 
                 // max state
                 d_max = max_g(d_max, d_val);
