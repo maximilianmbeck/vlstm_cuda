@@ -103,6 +103,12 @@ __device__ __forceinline__ __nv_bfloat162 div_g(const __nv_bfloat162 a,
                             __hdiv(__high2bfloat16(a), __high2bfloat16(b)));
 }
 
+// ABS
+template <>
+__device__ __forceinline__ __nv_bfloat162 abs_g(const __nv_bfloat162 a) {
+  return __habs2(a);
+}
+
 // -- ARITHMETIC FUNCTIONS
 
 // COMPARISON FUNCTIONS

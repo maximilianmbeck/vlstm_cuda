@@ -106,6 +106,11 @@ __device__ __forceinline__ __half2 div_g(const __half2 a, const __half2 b) {
   return __h2div(a, b);
 }
 
+// ABS
+template <> __device__ __forceinline__ __half2 abs_g(const __half2 a) {
+  return __habs2(a);
+}
+
 // -- ARITHMETIC FUNCTIONS
 
 // COMPARISON FUNCTIONS

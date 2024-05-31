@@ -93,6 +93,11 @@ template <typename T> __device__ __forceinline__ T div_g(const T a, const T b) {
   return a / b;
 }
 
+// ABS
+template <typename T> __device__ __forceinline__ T abs_g(const T a) {
+  return abs(a);
+}
+
 // -- ARITHMETIC FUNCTIONS
 
 // COMPARISON OPERATIONS
