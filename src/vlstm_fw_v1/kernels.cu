@@ -142,15 +142,26 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
 
   // init mChunk (QTileDim x 1) in shared memory for max state of
   // dTile
-  float *mChunk = (float *)&fTileCol[QtileDim * (1 + SHARED_MEM_PADDING)];
+  scalar_t *mChunk = (scalar_t *)&fTileCol[QtileDim * (1 + SHARED_MEM_PADDING)];
   // init mPrevTileCol (QTileDim x 1) in shared memory for previous
   // max state of dTile
-  float *mPrevChunk = (float *)&mChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  scalar_t *mPrevChunk =
+      (scalar_t *)&mChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
   // init lChunk (QTileDim x 1) in shared memory for rowsum of cTile * dTile
-  float *lChunk = (float *)&mPrevChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  scalar_t *lChunk =
+      (scalar_t *)&mPrevChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
   // init lPrevChunk (QTileDim x 1) in shared memory for previous rowsum of
   // cTile * dTile
-  float *lPrevChunk = (float *)&lChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  scalar_t *lPrevChunk =
+      (scalar_t *)&lChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  // init nChunk (QTileDim x 1) in shared memory for normalizer state
+  scalar_t *nChunk =
+      (scalar_t *)&lPrevChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  // init nPrevChunk (QTileDim x 1) in shared memory for previous normalizer
+  // state
+  scalar_t *nPrevChunk =
+      (scalar_t *)&nChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+
   // init fTileColLast (1 x 1) in shared memory for forget gate (last row value
   // of fTileCol)
   float *fTileColLast =
@@ -616,7 +627,8 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
 #endif
               }
               // save max state of dTile in shared memory
-              SMEMVECTOR(mChunk, dTileLocalThreadYIdx) = d_max;
+              SMEMVECTOR(mChunk, dTileLocalThreadYIdx) =
+                  float2type<scalar_t>(d_max);
               // save last f_acc_subtractfrom in fTileCol for next kvTileIdx
               SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = f_acc_subtractfrom;
             }
@@ -739,6 +751,11 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
         //! compute "raw normalizer" l as rowsum of cTile
         //! compute normalizer n as max(abs(l),exp(-m))
         // TODO implement this
+        // distinguish between kvTileIdx == 0 and kvTileIdx > 0
+        // TODO make a nChunk shared memory array to store the normalizers
+
+        // Do we need to store lChunk in global memory for backward? What do we
+        // need to store?
 
         // TODO reweight the previous H tile
 
@@ -777,6 +794,8 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                         hWarpTileThreadSharedMemXIdx) =
                   float2type<scalar_t>(sv_acc);
             } else {
+              // TODO here: reweight the old hTile according to tiled update
+              // formulas
               SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
                         hWarpTileThreadSharedMemXIdx) =
                   add_g(SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
@@ -893,6 +912,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(
       sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
   const uint lChunkSharedMemSize =
       sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
+  const uint nChunkSharedMemSize =
+      sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
 
   // Input/Output tiles: 4x for qTile, vTile, kTile, hTile
   // Intermediate tiles: 2x for cTile, dTile
@@ -901,7 +922,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(
       4 * qkvhTileSharedMemSize + 2 * cdTileSharedMemSize +
       iChunkSharedMemSize + fChunkSharedMemSize + fTileColSharedMemSize +
       2 * mChunkSharedMemSize + 2 * lChunkSharedMemSize +
-      fTileColLastSharedMemSize;
+      2 * nChunkSharedMemSize + fTileColLastSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
