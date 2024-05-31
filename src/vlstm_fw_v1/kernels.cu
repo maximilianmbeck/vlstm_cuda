@@ -1,6 +1,7 @@
 // Copyright JKU Linz 2023
 // Author: Maximilian Beck
 
+#include <__clang_cuda_math_forward_declares.h>
 #include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda.h>
@@ -216,7 +217,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
           qTileGridXYGlobalMemIdx + (dimHeads * QtileDim) * blockIdx.y;
 
       //* cTile Global Memory Index (virtual, as never materialized fully)
-      // (grid&block) offset Y-axis in C = Q*K^T matrix (along sequence
+      // (grid&block) offset Y-axis in S = Q*K^T matrix (along sequence
       // dimension) (used for checking causality)
       const uint cTileGridYIdx = QtileDim * gridDim.y * qTileIdx;
       const uint cTileBlockYIdx = cTileGridYIdx + QtileDim * blockIdx.y;
@@ -313,7 +314,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
         const uint kvTileBlockGlobalMemIdx =
             batchHeadGridXGlobalMemIdxQKV + (dimHeads * KVtileDim) * kvTileIdx;
 
-        //* (grid&block) offset X-axis in C = Q*K^T matrix
+        //* (grid&block) offset X-axis in S = Q*K^T matrix
         // (along sequence dimension) (used for checking causality)
         const uint cTileGridXIdx = KVtileDim * kvTileIdx;
         const uint cTileBlockXIdx = cTileGridXIdx;
@@ -686,14 +687,14 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
             }
           }
         }
-        //! compute C = (Q x K^T) * dTile, i.e. fill cTile
+        //! compute S = (Q x K^T)
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
         // loops over cTile rows (outer) and columns (inner)
         const uint cWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
         const uint cWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
         for (uint cWarpTileYIdx = 0; cWarpTileYIdx < cWarpTileYEnd;
              ++cWarpTileYIdx) {
-          //* (thread) offset Y-axis in C = Q*K^T
+          //* (thread) offset Y-axis in S = Q*K^T
           const uint cTileThreadYIdx =
               cTileBlockYIdx + blockDim.y * cWarpTileYIdx + threadIdx.y;
 
@@ -706,14 +707,14 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
             const uint cWarpTileThreadSharedMemXIdx =
                 blockDim.x * cWarpTileXIdx + threadIdx.x;
 
-            //* (thread) offset X-axis in C = Q*K^T
+            //* (thread) offset X-axis in S = Q*K^T
             const uint cTileThreadXIdx =
                 cTileBlockXIdx + blockDim.x * cWarpTileXIdx + threadIdx.x;
 
             // scalar_t qk_acc = dscalar_zero<scalar_t>();
             float qk_acc = 0.0f;
             //! check for causality here
-            // compute only the lower triangle (below main diagonal) of C =
+            // compute only the lower triangle (below main diagonal) of S =
             // Q*K^T
             if (cTileThreadXIdx <= cTileThreadYIdx) {
               for (uint i = 0; i < dimHeads; ++i) {
@@ -748,14 +749,56 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
           }
         }
 
+        //! multiply S with dTile, i.e. fill cTile
         //! compute "raw normalizer" l as rowsum of cTile
         //! compute normalizer n as max(abs(l),exp(-m))
-        // TODO implement this
-        // distinguish between kvTileIdx == 0 and kvTileIdx > 0
-        // TODO make a nChunk shared memory array to store the normalizers
+        // use flattened threads for the rowsum, i.e. each thread computes the
+        // sum of a row of cTile
+        // l and n are chunks (of 1D vectors) of size (QtileDim x 1)
+        const uint lWarpChunkEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+        for (uint lWarpChunkIdx = 0; lWarpChunkIdx < lWarpChunkEnd;
+             ++lWarpChunkIdx) {
 
-        // Do we need to store lChunk in global memory for backward? What do we
-        // need to store?
+          //? l idxes
+          //* shared memory:
+          const uint lThreadSharedMemYIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * lWarpChunkIdx;
+
+          if (lThreadSharedMemYIdx < QtileDim) {
+            scalar_t m_val = SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
+            float l_acc = 0.0f;
+            for (uint i = 0; i < KVtileDim; ++i) {
+              scalar_t s_val =
+                  SMEMARRAY(cTile, KVtileDim, lThreadSharedMemYIdx, i);
+              scalar_t d_val =
+                  SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
+
+              scalar_t c_tilde_val = s_val * exp_g(d_val - m_val);
+
+              // store c_tilde_val in dTile for now (later in cTile)
+              // for debugging only (since dTile is already written to global
+              // memory)
+              SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) =
+                  c_tilde_val;
+
+              l_acc = add_g(l_acc, type2float(c_tilde_val));
+            }
+            // store l_val
+            SMEMVECTOR(lChunk, lThreadSharedMemYIdx) = l_acc;
+            // compute n_val
+            scalar_t n_val =
+                max_g(abs_g(float2type<scalar_t>(l_acc)), exp_g(-m_val));
+            SMEMVECTOR(nChunk, lThreadSharedMemYIdx) = n_val;
+          }
+        }
+        // distinguish between kvTileIdx == 0 and kvTileIdx > 0
+        if (kvTileIdx > 0) {
+          // compute new m_val
+          float m_acc = 0.0f;
+        }
+
+        // TODO Do we need to store lChunk in global memory for backward? What
+        // do we need to store?
 
         // TODO reweight the previous H tile
 
