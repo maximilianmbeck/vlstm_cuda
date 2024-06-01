@@ -759,8 +759,9 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
           }
         }
 
-        //! compute "raw normalizer" l as rowsum of cTile
-        //! compute normalizer n as max(abs(l),exp(-m))
+        //! compute C_tilde: multiply S with dTile, i.e. fill cTile
+        //! compute "raw normalizer" l: rowsum of cTile
+        //! compute normalizer n: max(abs(l),exp(-m))
         // use flattened threads for the rowsum, i.e. each thread computes the
         // sum of a row of cTile
         // l and n are chunks (of 1D vectors) of size (QtileDim x 1)
@@ -774,7 +775,13 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
               flatThreadIdx + blockDim.x * blockDim.y * lWarpChunkIdx;
 
           if (lThreadSharedMemYIdx < QtileDim) {
-            scalar_t m_val = SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
+            // compute m_val
+            scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, lThreadSharedMemYIdx);
+            scalar_t m_val =
+                max_g(m_prev_val, SMEMVECTOR(mChunk, lThreadSharedMemYIdx));
+            SMEMVECTOR(mChunk, lThreadSharedMemYIdx) = m_val;
+
+            // compute c_tilde_val
             float l_acc = 0.0f;
             for (uint i = 0; i < KVtileDim; ++i) {
               scalar_t s_val =
@@ -782,55 +789,51 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
               scalar_t d_val =
                   SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
 
-              //   if (kvTileIdx == 0) {
-              //     // store c_tilde_val in dTile for now (later in cTile)
-              //     // for debugging only (since dTile is already written to
-              //     global
-              //     // memory)
+              // store c_tilde_val in dTile for now (later in cTile)
+              // for debugging only (since dTile is already written to
+              //   global memory)
+              scalar_t c_tilde_val = mul_g(s_val, exp_g(sub_g(d_val, m_val)));
+              SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) =
+                  c_tilde_val;
 
-              //     scalar_t c_tilde_val = mul_g(s_val, exp_g(sub_g(d_val,
-              //     m_val))); SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx,
-              //     i) =
-              //         c_tilde_val;
-
-              //     l_acc = add_g(l_acc, type2float(c_tilde_val));
-              //   }
+              l_acc = add_g(l_acc, type2float(c_tilde_val));
             }
-            // store l_val
+
+            // compute l_val
             scalar_t l_prev_val = SMEMVECTOR(lPrevChunk, lThreadSharedMemYIdx);
-            scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, lThreadSharedMemYIdx);
             scalar_t l_val =
                 add_g(mul_g(exp_g(sub_g(m_prev_val, m_val)), l_prev_val),
                       float2type<scalar_t>(l_acc));
             SMEMVECTOR(lChunk, lThreadSharedMemYIdx) = l_val;
+
             // compute n_val
             scalar_t n_val = max_g(abs_g(l_val), exp_g(neg_g(m_val)));
             SMEMVECTOR(nChunk, lThreadSharedMemYIdx) = n_val;
           }
         }
         __syncthreads();
-        //! multiply S with dTile, i.e. fill cTile
-        for (uint lWarpChunkIdx = 0; lWarpChunkIdx < lWarpChunkEnd;
-             ++lWarpChunkIdx) {
-          //? l idxes
-          //* shared memory:
-          const uint lThreadSharedMemYIdx =
-              flatThreadIdx + blockDim.x * blockDim.y * lWarpChunkIdx;
 
-          if (lThreadSharedMemYIdx < QtileDim) {
-            scalar_t m_val = SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
-            for (uint i = 0; i < KVtileDim; ++i) {
-              scalar_t s_val =
-                  SMEMARRAY(cTile, KVtileDim, lThreadSharedMemYIdx, i);
-              scalar_t d_val =
-                  SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
+        // for (uint lWarpChunkIdx = 0; lWarpChunkIdx < lWarpChunkEnd;
+        //      ++lWarpChunkIdx) {
+        //   //? l idxes
+        //   //* shared memory:
+        //   const uint lThreadSharedMemYIdx =
+        //       flatThreadIdx + blockDim.x * blockDim.y * lWarpChunkIdx;
 
-              scalar_t c_val = mul_g(s_val, exp_g(sub_g(d_val, m_val)));
-              SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) = c_val;
-            }
-          }
-        }
-        __syncthreads();
+        //   if (lThreadSharedMemYIdx < QtileDim) {
+        //     scalar_t m_val = SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
+        //     for (uint i = 0; i < KVtileDim; ++i) {
+        //       scalar_t s_val =
+        //           SMEMARRAY(cTile, KVtileDim, lThreadSharedMemYIdx, i);
+        //       scalar_t d_val =
+        //           SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
+
+        //       scalar_t c_val = mul_g(s_val, exp_g(sub_g(d_val, m_val)));
+        //       SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) = c_val;
+        //     }
+        //   }
+        // }
+        // __syncthreads();
 
         // TODO Do we need to store lChunk in global memory for backward? What
         // do we need to store?
