@@ -1,5 +1,5 @@
 // Copyright 2023 IARAI GmbH, All Rights Reserved
-// Author: Korbinian Pöppel, adapted by Maximilian Beck
+// Author: Korbinian Pöppel, Maximilian Beck
 // Adapted from the haste library
 //
 // See:
@@ -246,6 +246,10 @@ template <> __device__ __forceinline__ float type2float(const float x) {
 
 template <> __device__ __forceinline__ float type2float(const double x) {
   return (double)x;
+}
+
+template <> __device__ __forceinline__ float type2float(const int x) {
+  return __int2float_rn(x);
 }
 
 template <typename T> __device__ __forceinline__ T float2type(const float x);
