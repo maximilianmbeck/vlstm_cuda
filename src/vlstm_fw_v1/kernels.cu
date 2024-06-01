@@ -1,7 +1,6 @@
 // Copyright JKU Linz 2023
 // Author: Maximilian Beck
 
-#include <__clang_cuda_math_forward_declares.h>
 #include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda.h>
@@ -281,7 +280,8 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
       //? flatten the threads to 1D
       const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
 
-      //! init fTileCol to fTileColLast
+      //! init fTileCol to fTileColLast, init mPrevChunk to -inf,
+      //! init lPrevChunk to 0, init nPrevChunk to 0
       // Y: seqLen (or QtileDim), X: 1 (fTileCol has only Y dimension)
       const uint fTileColChunkYEnd =
           CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
@@ -293,8 +293,18 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
             flatThreadIdx + blockDim.x * blockDim.y * fTileColChunkYIdx;
 
         if (fThreadSharedMemYIdx < QtileDim) {
+          // fTileCol
           SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
               SMEMVECTOR(fTileColLast, 0);
+          // mPrevChunk
+          SMEMVECTOR(mPrevChunk, fThreadSharedMemYIdx) =
+              float2type<scalar_t>(-CUDART_INF_F);
+          // lPrevChunk
+          SMEMVECTOR(lPrevChunk, fThreadSharedMemYIdx) =
+              float2type<scalar_t>(0.0f);
+          // nPrevChunk
+          SMEMVECTOR(nPrevChunk, fThreadSharedMemYIdx) =
+              float2type<scalar_t>(0.0f);
         }
       }
       __syncthreads();
@@ -749,7 +759,6 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
           }
         }
 
-        //! multiply S with dTile, i.e. fill cTile
         //! compute "raw normalizer" l as rowsum of cTile
         //! compute normalizer n as max(abs(l),exp(-m))
         // use flattened threads for the rowsum, i.e. each thread computes the
@@ -773,34 +782,58 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
               scalar_t d_val =
                   SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
 
-              scalar_t c_tilde_val = s_val * exp_g(d_val - m_val);
+              //   if (kvTileIdx == 0) {
+              //     // store c_tilde_val in dTile for now (later in cTile)
+              //     // for debugging only (since dTile is already written to
+              //     global
+              //     // memory)
 
-              // store c_tilde_val in dTile for now (later in cTile)
-              // for debugging only (since dTile is already written to global
-              // memory)
-              SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) =
-                  c_tilde_val;
+              //     scalar_t c_tilde_val = mul_g(s_val, exp_g(sub_g(d_val,
+              //     m_val))); SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx,
+              //     i) =
+              //         c_tilde_val;
 
-              l_acc = add_g(l_acc, type2float(c_tilde_val));
+              //     l_acc = add_g(l_acc, type2float(c_tilde_val));
+              //   }
             }
             // store l_val
-            SMEMVECTOR(lChunk, lThreadSharedMemYIdx) = l_acc;
+            scalar_t l_prev_val = SMEMVECTOR(lPrevChunk, lThreadSharedMemYIdx);
+            scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, lThreadSharedMemYIdx);
+            scalar_t l_val =
+                add_g(mul_g(exp_g(sub_g(m_prev_val, m_val)), l_prev_val),
+                      float2type<scalar_t>(l_acc));
+            SMEMVECTOR(lChunk, lThreadSharedMemYIdx) = l_val;
             // compute n_val
-            scalar_t n_val =
-                max_g(abs_g(float2type<scalar_t>(l_acc)), exp_g(-m_val));
+            scalar_t n_val = max_g(abs_g(l_val), exp_g(neg_g(m_val)));
             SMEMVECTOR(nChunk, lThreadSharedMemYIdx) = n_val;
           }
         }
-        // distinguish between kvTileIdx == 0 and kvTileIdx > 0
-        if (kvTileIdx > 0) {
-          // compute new m_val
-          float m_acc = 0.0f;
+        __syncthreads();
+        //! multiply S with dTile, i.e. fill cTile
+        for (uint lWarpChunkIdx = 0; lWarpChunkIdx < lWarpChunkEnd;
+             ++lWarpChunkIdx) {
+          //? l idxes
+          //* shared memory:
+          const uint lThreadSharedMemYIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * lWarpChunkIdx;
+
+          if (lThreadSharedMemYIdx < QtileDim) {
+            scalar_t m_val = SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
+            for (uint i = 0; i < KVtileDim; ++i) {
+              scalar_t s_val =
+                  SMEMARRAY(cTile, KVtileDim, lThreadSharedMemYIdx, i);
+              scalar_t d_val =
+                  SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
+
+              scalar_t c_val = mul_g(s_val, exp_g(sub_g(d_val, m_val)));
+              SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) = c_val;
+            }
+          }
         }
+        __syncthreads();
 
         // TODO Do we need to store lChunk in global memory for backward? What
         // do we need to store?
-
-        // TODO reweight the previous H tile
 
         //! compute H += C * V, i.e. fill hTile
         //! accumulate KVtiles to hTile
@@ -846,6 +879,25 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                         float2type<scalar_t>(sv_acc));
             }
             __syncthreads();
+          }
+        }
+
+        //! move to next kvTileIdx
+        // update lPrevChunk, mPrevChunk, nPrevChunk
+        for (uint lWarpChunkIdx = 0; lWarpChunkIdx < lWarpChunkEnd;
+             ++lWarpChunkIdx) {
+          //? l idxes
+          //* shared memory:
+          const uint lThreadSharedMemYIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * lWarpChunkIdx;
+
+          if (lThreadSharedMemYIdx < QtileDim) {
+            SMEMVECTOR(lPrevChunk, lThreadSharedMemYIdx) =
+                SMEMVECTOR(lChunk, lThreadSharedMemYIdx);
+            SMEMVECTOR(mPrevChunk, lThreadSharedMemYIdx) =
+                SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
+            SMEMVECTOR(nPrevChunk, lThreadSharedMemYIdx) =
+                SMEMVECTOR(nChunk, lThreadSharedMemYIdx);
           }
         }
       }
