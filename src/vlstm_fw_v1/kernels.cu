@@ -813,28 +813,6 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
         }
         __syncthreads();
 
-        // for (uint lWarpChunkIdx = 0; lWarpChunkIdx < lWarpChunkEnd;
-        //      ++lWarpChunkIdx) {
-        //   //? l idxes
-        //   //* shared memory:
-        //   const uint lThreadSharedMemYIdx =
-        //       flatThreadIdx + blockDim.x * blockDim.y * lWarpChunkIdx;
-
-        //   if (lThreadSharedMemYIdx < QtileDim) {
-        //     scalar_t m_val = SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
-        //     for (uint i = 0; i < KVtileDim; ++i) {
-        //       scalar_t s_val =
-        //           SMEMARRAY(cTile, KVtileDim, lThreadSharedMemYIdx, i);
-        //       scalar_t d_val =
-        //           SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
-
-        //       scalar_t c_val = mul_g(s_val, exp_g(sub_g(d_val, m_val)));
-        //       SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) = c_val;
-        //     }
-        //   }
-        // }
-        // __syncthreads();
-
         // TODO Do we need to store lChunk in global memory for backward? What
         // do we need to store?
 
@@ -846,6 +824,16 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
         const uint hWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
         for (uint hWarpTileYIdx = 0; hWarpTileYIdx < hWarpTileYEnd;
              ++hWarpTileYIdx) {
+
+          scalar_t n_val = SMEMVECTOR(nChunk, hWarpTileYIdx);
+          scalar_t n_prev_val = SMEMVECTOR(nPrevChunk, hWarpTileYIdx);
+          scalar_t m_val = SMEMVECTOR(mChunk, hWarpTileYIdx);
+          scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, hWarpTileYIdx);
+
+          // weight = exp(m_prev - m) * n_prev / n
+          scalar_t weighting_factor_h_prev =
+              mul_g(exp_g(sub_g(m_prev_val, m_val)), div_g(n_prev_val, n_val));
+
           for (uint hWarpTileXIdx = 0; hWarpTileXIdx < hWarpTileXEnd;
                ++hWarpTileXIdx) {
 
@@ -856,16 +844,19 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
             const uint hWarpTileThreadSharedMemXIdx =
                 blockDim.x * hWarpTileXIdx + threadIdx.x;
 
-            // scalar_t sv_acc = dscalar_zero<scalar_t>();
             float sv_acc = 0.0f;
             for (uint i = 0; i < KVtileDim; ++i) {
+              // compute c_val: c_val = c_tilde_val / n_val
+              scalar_t c_tilde_val =
+                  SMEMARRAY(dTile, KVtileDim, hWarpTileThreadSharedMemYIdx, i);
+              scalar_t c_val = div_g(c_tilde_val, n_val);
+
               sv_acc = add_g(
-                  sv_acc,
-                  type2float(mul_g(SMEMARRAY(cTile, KVtileDim,
-                                             hWarpTileThreadSharedMemYIdx, i),
-                                   SMEMARRAY(vTile, dimHeads, i,
-                                             hWarpTileThreadSharedMemXIdx))));
+                  sv_acc, type2float(mul_g(
+                              c_val, SMEMARRAY(vTile, dimHeads, i,
+                                               hWarpTileThreadSharedMemXIdx))));
             }
+
             // accumulate over all KVtiles
             if (kvTileIdx == 0) {
               // we need to clear the hTile in first iteration
@@ -873,13 +864,16 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                         hWarpTileThreadSharedMemXIdx) =
                   float2type<scalar_t>(sv_acc);
             } else {
-              // TODO here: reweight the old hTile according to tiled update
+              scalar_t h_prev_val =
+                  SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
+                            hWarpTileThreadSharedMemXIdx);
+              // reweight the previous value
+              scalar_t weighted_h_prev_val =
+                  mul_g(weighting_factor_h_prev, h_prev_val);
               // formulas
               SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
                         hWarpTileThreadSharedMemXIdx) =
-                  add_g(SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
-                                  hWarpTileThreadSharedMemXIdx),
-                        float2type<scalar_t>(sv_acc));
+                  add_g(weighted_h_prev_val, float2type<scalar_t>(sv_acc));
             }
             __syncthreads();
           }
