@@ -64,6 +64,8 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *matC, scalar_t *matQ,
 // #define DEBUG8 1
 // #define DEBUG9 1
 // #define DEBUG10 1
+// #define DEBUG11 1
+#define DEBUG12 1
 
 /**
 Conventions:
@@ -528,6 +530,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
         // kvTileIdx at the end of the current kvTileIdx iteration
 
         // only do this for lower triangular part of the d matrix
+        // TODO try this: cTileBlockXIdx <= cTileBlockYIdx
         if (true) {
 #ifdef DEBUG8
           if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx == 0)) {
@@ -781,9 +784,17 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
                 max_g(m_prev_val, SMEMVECTOR(mChunk, lThreadSharedMemYIdx));
             SMEMVECTOR(mChunk, lThreadSharedMemYIdx) = m_val;
 
-            // compute c_tilde_val
+            // compute c_tilde_val in lower triangle of C Matrix
+            //? c idxes
+            const uint cTileGlobalThreadYIdx =
+                cTileBlockYIdx + lThreadSharedMemYIdx;
             float l_acc = 0.0f;
             for (uint i = 0; i < KVtileDim; ++i) {
+              const uint cTileGlobalThreadXIdx = cTileBlockXIdx + i;
+              //   if (cTileGlobalThreadXIdx > cTileGlobalThreadYIdx) {
+              //     break;
+              //   }
+
               scalar_t s_val =
                   SMEMARRAY(cTile, KVtileDim, lThreadSharedMemYIdx, i);
               scalar_t d_val =
@@ -809,6 +820,17 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
             // compute n_val
             scalar_t n_val = max_g(abs_g(l_val), exp_g(neg_g(m_val)));
             SMEMVECTOR(nChunk, lThreadSharedMemYIdx) = n_val;
+#ifdef DEBUG12
+            if ((blockIdx.x == 0) && (blockIdx.y == 0)) {
+              printf("qTileIdx=%d, kvTileIdx=%d, cTBlXIdx=%d, "
+                     "cTBlYIdx=%d, lThreadSMIdx=%d, tbIdxXY=(%d,%d): "
+                     "l_val=%f, l_prev_val=%f, exp(-m_val)=%f, n_val=%f\n",
+                     qTileIdx, kvTileIdx, cTileBlockXIdx, cTileBlockYIdx,
+                     lThreadSharedMemYIdx, threadIdx.x, threadIdx.y,
+                     type2float(l_val), type2float(l_prev_val),
+                     type2float(exp_g(neg_g(m_val))), type2float(n_val));
+            }
+#endif
           }
         }
         __syncthreads();
@@ -824,11 +846,29 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
         const uint hWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
         for (uint hWarpTileYIdx = 0; hWarpTileYIdx < hWarpTileYEnd;
              ++hWarpTileYIdx) {
+          //? cTileIdxes
+          //* shared memory:
+          const uint hWarpTileThreadSharedMemYIdx =
+              blockDim.y * hWarpTileYIdx + threadIdx.y;
 
-          scalar_t n_val = SMEMVECTOR(nChunk, hWarpTileYIdx);
-          scalar_t n_prev_val = SMEMVECTOR(nPrevChunk, hWarpTileYIdx);
-          scalar_t m_val = SMEMVECTOR(mChunk, hWarpTileYIdx);
-          scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, hWarpTileYIdx);
+          scalar_t n_val = SMEMVECTOR(nChunk, hWarpTileThreadSharedMemYIdx);
+          scalar_t n_prev_val =
+              SMEMVECTOR(nPrevChunk, hWarpTileThreadSharedMemYIdx);
+          scalar_t m_val = SMEMVECTOR(mChunk, hWarpTileThreadSharedMemYIdx);
+          scalar_t m_prev_val =
+              SMEMVECTOR(mPrevChunk, hWarpTileThreadSharedMemYIdx);
+
+#ifdef DEBUG11
+          if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0)) {
+            printf("qTileIdx=%d, kvTileIdx=%d, cTileBlockXIdx=%d, "
+                   "cTileBlockYIdx=%d, hWTileSMIdxY=%d, tbIdxXY=(%d,%d): "
+                   "m_val=%f, m_prev_val=%f, n_val=%f, n_prev_val=%f\n",
+                   qTileIdx, kvTileIdx, cTileBlockXIdx, cTileBlockYIdx,
+                   hWarpTileThreadSharedMemYIdx, threadIdx.x, threadIdx.y,
+                   type2float(m_val), type2float(m_prev_val), type2float(n_val),
+                   type2float(n_prev_val));
+          }
+#endif
 
           // weight = exp(m_prev - m) * n_prev / n
           scalar_t weighting_factor_h_prev =
@@ -839,8 +879,8 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
 
             //? cTileIdxes
             //* shared memory:
-            const uint hWarpTileThreadSharedMemYIdx =
-                blockDim.y * hWarpTileYIdx + threadIdx.y;
+            // const uint hWarpTileThreadSharedMemYIdx =
+            //     blockDim.y * hWarpTileYIdx + threadIdx.y;
             const uint hWarpTileThreadSharedMemXIdx =
                 blockDim.x * hWarpTileXIdx + threadIdx.x;
 
@@ -963,8 +1003,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const dim3 gridDims(batchSize * numHeads, 2);
-  //   const dim3 gridDims(1, 1);
+  //   const dim3 gridDims(batchSize * numHeads, 2);
+  const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size
   // TODO understand how memory padding works!

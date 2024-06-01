@@ -131,7 +131,7 @@ def vlstm_parallel_tiled(
             n_prev = n
         h_matrix[:, :, q_idx * bq_tile_size : (q_idx + 1) * bq_tile_size, :] = h_tile
 
-    return h_matrix, m, l
+    return h_matrix, m, l, n
 
 
 # non-tiled reference implementation
