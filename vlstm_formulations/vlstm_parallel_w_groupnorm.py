@@ -305,7 +305,7 @@ class vLSTMParallelFwBwFull(torch.autograd.Function):
 
         delta_Q = (delta_Ctilde * var_D) @ (keys / math.sqrt(DH))
         delta_K = (delta_Ctilde * var_D).transpose(-2, -1) @ (queries / math.sqrt(DH))
-        delta_V = var_Ctilde.transpose(-2, -1) @ grad_var_R_divN / (var_N + eps)
+        delta_V = var_Ctilde.transpose(-2, -1) @ (grad_var_R_divN / (var_N + eps))
         # delta_V = var_C.transpose(-2, -1) @ grad_var_R
 
         grad_var_q = delta_Q
