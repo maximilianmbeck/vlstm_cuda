@@ -13,9 +13,9 @@
 
 namespace vlstm {
 
-std::tuple<Tensor, Tensor> interface::vlstm_fw(Tensor matQ, Tensor matK,
-                                               Tensor matV, Tensor iGatePreact,
-                                               Tensor fGatePreact) {
+std::tuple<Tensor, Tensor, Tensor, Tensor>
+interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV, Tensor iGatePreact,
+                    Tensor fGatePreact) {
   const auto batchSize = matQ.size(0);
   const auto numHeads = matQ.size(1);
   const auto seqLen = matQ.size(2);
@@ -50,7 +50,11 @@ std::tuple<Tensor, Tensor> interface::vlstm_fw(Tensor matQ, Tensor matK,
   auto matH =
       torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matQ.options());
 
-  // C or D matrix (S x S)
+  // store intermediate computations for backward pass
+  auto vecN = torch::zeros({batchSize, numHeads, seqLen}, matQ.options());
+  auto vecM = torch::zeros({batchSize, numHeads, seqLen}, matQ.options());
+
+  // only for debugging: C or D matrix (S x S) (will be removed later)
   auto matC =
       torch::zeros({batchSize, numHeads, seqLen, seqLen}, matQ.options());
 
@@ -60,6 +64,8 @@ std::tuple<Tensor, Tensor> interface::vlstm_fw(Tensor matQ, Tensor matK,
           printf("before kernel dispatch - bfloat16!\n");
           kernel_dispatchers::vlstm_fw_dispatch<__nv_bfloat16>(
               reinterpret_cast<__nv_bfloat16 *>(matH.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(vecN.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(vecM.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matK.data_ptr<scalar_t>()),
@@ -73,6 +79,8 @@ std::tuple<Tensor, Tensor> interface::vlstm_fw(Tensor matQ, Tensor matK,
           printf("before kernel dispatch - float16!\n");
           kernel_dispatchers::vlstm_fw_dispatch<__half>(
               reinterpret_cast<__half *>(matH.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(vecN.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(vecM.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matK.data_ptr<scalar_t>()),
@@ -84,6 +92,8 @@ std::tuple<Tensor, Tensor> interface::vlstm_fw(Tensor matQ, Tensor matK,
           printf("before kernel dispatch - float32!\n");
           kernel_dispatchers::vlstm_fw_dispatch<float>(
               reinterpret_cast<float *>(matH.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(vecN.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(vecM.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matK.data_ptr<scalar_t>()),
@@ -96,7 +106,7 @@ std::tuple<Tensor, Tensor> interface::vlstm_fw(Tensor matQ, Tensor matK,
         }
       }));
 
-  return std::make_tuple(matH, matC);
+  return std::make_tuple(matH, vecN, vecM, matC);
 }
 
 std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor>

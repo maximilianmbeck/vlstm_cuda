@@ -8,8 +8,9 @@ namespace vlstm {
 namespace kernel_dispatchers {
 
 template <typename scalar_t>
-void vlstm_fw_dispatch(scalar_t *matH, scalar_t *matC, scalar_t *matQ,
-                       scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
+void vlstm_fw_dispatch(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
+                       scalar_t *matC, scalar_t *matQ, scalar_t *matK,
+                       scalar_t *matV, scalar_t *iGatePreact,
                        scalar_t *fGatePreact, int batchSize, int numHeads,
                        int seqLen, int dimHeads);
 
