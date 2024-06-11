@@ -1,19 +1,24 @@
-# Copyright JKU Linz 2024
+# Copyright JKU Linz 2023
 # Author: Maximilian Beck
-
 import math
 
 import torch
 import torch.nn.functional as F
 
+"""In this file we implement the tiled version of the forward pass of the VLSTM model.
 
-def vlstm_parallel_fw_torch_w_groupnorm(
+The tiled version is used for the kernel implementation of the model.
+"""
+
+
+def vlstm_fw_tiled_torch(
     queries: torch.Tensor,
     keys: torch.Tensor,
     values: torch.Tensor,
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
-    stabilize_rowwise: bool = True,
+    bq_tile_size: int = -1,
+    bkv_tile_size: int = -1,
     eps: float = 1e-6,
 ) -> torch.Tensor:
     """This is the core vLSTM operation in parallel form.
@@ -26,8 +31,10 @@ def vlstm_parallel_fw_torch_w_groupnorm(
         values (torch.Tensor): (B, NH, S, DH)
         igate_preact (torch.Tensor): (B, NH, S, 1)
         fgate_preact (torch.Tensor): (B, NH, S, 1)
-        stabilize_rowwise (bool, optional): Wether to stabilize the combination matrix C rowwise (take maximum per row).
-            Alternative: Subtract the maximum over all rows. Defaults to True.
+        bq_tile_size (int, optional): Tile size along sequence dim for queries. Defaults to -1.
+                                      If -1, no tiling is performed.
+        bkv_tile_size (int, optional): Tile size along sequence dim for keys and values. Defaults to -1.
+                                        If -1, no tiling is performed.
 
     Returns:
         torch.Tensor: (B, NH, S, DH), retrieved values
@@ -35,7 +42,16 @@ def vlstm_parallel_fw_torch_w_groupnorm(
 
     B, NH, S, DH = queries.shape
     _dtype, _device = queries.dtype, queries.device
+    if bq_tile_size == -1:
+        bq_tile_size = S
+    else:
+        assert S % bq_tile_size == 0, "S must be divisible by bq_tile_size"
+    if bkv_tile_size == -1:
+        bkv_tile_size = S
+    else:
+        assert S % bkv_tile_size == 0, "S must be divisible by bkv_tile_size"
 
+    #! We compute the gate matrix D in non tiled way:
     # forget gate matrix
     log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
     ltr = torch.tril(
@@ -71,14 +87,124 @@ def vlstm_parallel_fw_torch_w_groupnorm(
 
     # gate decay matrix D (combination of forget gate and input gate)
     log_D_matrix = log_fg_matrix + igate_preact.transpose(-2, -1)  # (B, NH, S, S)
+
+    #! From here begin tiling:
+    q_tiles = torch.split(queries, bq_tile_size, dim=2)
+    k_tiles = torch.split(keys, bkv_tile_size, dim=2)
+    v_tiles = torch.split(values, bkv_tile_size, dim=2)
+    print(f"q_tiles: {len(q_tiles)}, {q_tiles[0].shape}")
+    print(f"kv_tiles: {len(k_tiles)}, {k_tiles[0].shape}")
+
+    # we do not break causality since the log_fg_matrix is already causal
+
+    h_matrix = torch.zeros_like(queries)  # the output matrix
+    for q_idx, q_tile in enumerate(q_tiles):
+        m_prev = torch.zeros((B, NH, bq_tile_size, 1), dtype=_dtype, device=_device)
+        l_prev = torch.zeros((B, NH, bq_tile_size, 1), dtype=_dtype, device=_device)
+        n_prev = torch.zeros((B, NH, bq_tile_size, 1), dtype=_dtype, device=_device)
+        h_tile = torch.zeros_like(q_tile)
+        for kv_idx, (k_tile, v_tile) in enumerate(zip(k_tiles, v_tiles)):
+            # print(f"q_idx: {q_idx*bq_tile_size}, kv_idx: {kv_idx*bkv_tile_size}")
+            d_tile = log_D_matrix[
+                :,
+                :,
+                q_idx * bq_tile_size : (q_idx + 1) * bq_tile_size,
+                kv_idx * bkv_tile_size : (kv_idx + 1) * bkv_tile_size,
+            ]
+            s_tile = q_tile @ (k_tile.transpose(-2, -1) / math.sqrt(DH))
+            if kv_idx == 0:
+                m, _ = torch.max(d_tile, dim=-1, keepdim=True)
+                l = (s_tile * torch.exp(d_tile - m)).sum(dim=-1, keepdim=True)
+            else:
+                m = torch.maximum(m_prev, torch.max(d_tile, dim=-1, keepdim=True)[0])
+                l = torch.exp(m_prev - m) * l_prev + (
+                    s_tile * torch.exp(d_tile - m)
+                ).sum(dim=-1, keepdim=True)
+
+            n = torch.maximum(torch.abs(l), torch.exp(-m))
+            c_tile = (s_tile * torch.exp(d_tile - m)) / (n + eps)
+
+            h_tile = torch.exp(m_prev - m) * (n_prev / n) * h_tile + c_tile @ v_tile
+
+            m_prev = m
+            l_prev = l
+            n_prev = n
+        h_matrix[:, :, q_idx * bq_tile_size : (q_idx + 1) * bq_tile_size, :] = h_tile
+
+    return h_matrix, m, l
+
+
+# non-tiled reference implementation
+def vlstm_fw_torch_ref(
+    queries: torch.Tensor,
+    keys: torch.Tensor,
+    values: torch.Tensor,
+    igate_preact: torch.Tensor,
+    fgate_preact: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """This is the core vLSTM operation in parallel form.
+    This version is stabilized. We control the range of exp() arguments by
+    ensuring that they are always smaller than 0.0 by subtracting the maximum.
+
+    Args:
+        queries (torch.Tensor): (B, NH, S, DH)
+        keys (torch.Tensor): (B, NH, S, DH)
+        values (torch.Tensor): (B, NH, S, DH)
+        igate_preact (torch.Tensor): (B, NH, S, 1)
+        fgate_preact (torch.Tensor): (B, NH, S, 1)
+        stabilize_rowwise (bool, optional): Wether to stabilize the combination matrix C rowwise (take maximum per row).
+            Alternative: Subtract the maximum over all rows. Defaults to True.
+
+    Returns:
+        torch.Tensor: (B, NH, S, DH), retrieved values
+    """
+
+    B, NH, S, DH = queries.shape
+    _dtype, _device = queries.dtype, queries.device
+
+    # forget gate matrix
+    log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
+    # log_fgates = (
+    #     fgate_preact  # (B, NH, S, 1) #! We do not apply sigmoid here for debugging
+    # )
+
+    ltr = torch.tril(
+        torch.ones(
+            (S, S),
+            dtype=torch.bool,
+            device=_device,
+        )
+    )
+    log_fgates_cumsum = torch.cat(
+        [
+            torch.zeros((B, NH, 1, 1), dtype=_dtype, device=_device),
+            torch.cumsum(log_fgates, dim=-2),
+        ],
+        dim=-2,
+    )  # (B, NH, S+1, 1)
+    # for each batch/head this is a matrix of shape (S+1, S+1) containing the cumsum of the log forget gate values
+    # in the second dimension (colum dimension). Each row has the same is a copy of the first row.
+    # First entry of each row is zero.
+    rep_log_fgates_cumsum = log_fgates_cumsum.repeat(
+        1, 1, 1, S + 1
+    )  # (B, NH, S+1, S+1)
+    # Now in each row cut off / subtract the forgetgate values of the later timesteps
+    # where col j > row i
+    _log_fg_matrix = rep_log_fgates_cumsum - rep_log_fgates_cumsum.transpose(
+        -2, -1
+    )  # (B, NH, S+1, S+1)
+    # Causal masking & selection of the correct submatrix, such that forgetgate at timestep t is not applied
+    # to the input at timestep t
+    log_fg_matrix = torch.where(
+        ltr, _log_fg_matrix[:, :, 1:, 1:], -float("inf")
+    )  # (B, NH, S, S)
+
+    # gate decay matrix D (combination of forget gate and input gate)
+    log_D_matrix = log_fg_matrix + igate_preact.transpose(-2, -1)  # (B, NH, S, S)
+    # log_D_matrix = log_fg_matrix  # (B, NH, S, S)
     # D matrix stabilization
-    if stabilize_rowwise:
-        max_log_D, _ = torch.max(log_D_matrix, dim=-1, keepdim=True)  # (B, NH, S, 1)
-    else:
-        max_log_D = torch.max(log_D_matrix.view(B, NH, -1), dim=-1, keepdim=True)[
-            0
-        ].unsqueeze(-1)
-        # (B, NH, 1, 1)
+    max_log_D, _ = torch.max(log_D_matrix, dim=-1, keepdim=True)  # (B, NH, S, 1)
     log_D_matrix_stabilized = log_D_matrix - max_log_D  # (B, NH, S, S)
     D_matrix = torch.exp(log_D_matrix_stabilized)  # (B, NH, S, S)
 
@@ -87,18 +213,14 @@ def vlstm_parallel_fw_torch_w_groupnorm(
     # combination matrix C
     qk_matrix = queries @ keys_scaled.transpose(-2, -1)  # (B, NH, S, S)
     C_matrix = qk_matrix * D_matrix  # (B, NH, S, S)
-    normalizer = torch.maximum(
-        C_matrix.sum(dim=-1, keepdim=True).abs(), torch.exp(-max_log_D)
-    )  # (B, NH, S, 1)
+    l = C_matrix.sum(dim=-1, keepdim=True)
+    normalizer = torch.maximum(l.abs(), torch.exp(-max_log_D))  # (B, NH, S, 1)
     # (B, NH, S, S)
     C_matrix_normalized = C_matrix / (normalizer + eps)
 
     # retrieved values
     retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
-    # out_scaled = (
-    #     retrieved_values - retrieved_values.mean(dim=-1, keepdim=True)
-    # ) / retrieved_values.std(dim=-1, keepdim=True, unbiased=False)
-    return retrieved_values
+    return retrieved_values, max_log_D, l, log_D_matrix
 
 
 def vlstm_parallel_fwbw_torch_w_groupnorm(
@@ -107,16 +229,15 @@ def vlstm_parallel_fwbw_torch_w_groupnorm(
     values: torch.Tensor,
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
-    stabilize_rowwise: bool = True,
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    retrieved_values = vLSTMParallelFwBwFull.apply(
-        queries, keys, values, igate_preact, fgate_preact, stabilize_rowwise, eps
+    retrieved_values = vLSTMParallelFwBwFullwGroupNorm.apply(
+        queries, keys, values, igate_preact, fgate_preact, eps
     )
     return retrieved_values
 
 
-class vLSTMParallelFwBwFull(torch.autograd.Function):
+class vLSTMParallelFwBwFullwGroupNorm(torch.autograd.Function):
 
     @staticmethod
     def forward(
@@ -126,7 +247,6 @@ class vLSTMParallelFwBwFull(torch.autograd.Function):
         values: torch.Tensor,
         igate_preact: torch.Tensor,
         fgate_preact: torch.Tensor,
-        stabilize_rowwise: bool = True,
         eps: float = 1e-6,
     ) -> torch.Tensor:
         """
@@ -182,12 +302,7 @@ class vLSTMParallelFwBwFull(torch.autograd.Function):
 
         var_Dtilde = log_fg_matrix + ig_matrix
 
-        if stabilize_rowwise:
-            var_M, _ = torch.max(var_Dtilde, dim=-1, keepdim=True)
-        else:
-            var_M = torch.max(var_Dtilde.view(B, NH, -1), dim=-1, keepdim=True)[
-                0
-            ].unsqueeze(-1)
+        var_M, _ = torch.max(var_Dtilde, dim=-1, keepdim=True)
 
         var_D = torch.exp(var_Dtilde - var_M)
 
@@ -265,7 +380,6 @@ class vLSTMParallelFwBwFull(torch.autograd.Function):
             delta_B  # will be broadcasted automatically along last dimension
         )
         delta_Ctilde = delta_C  # + delta_B  #!
-        print(delta_B)
         # delta_Ctilde = delta_Ctilde_C + delta_Ctilde_B
 
         delta_D = delta_Ctilde * var_QK
