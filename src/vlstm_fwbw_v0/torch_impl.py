@@ -141,7 +141,7 @@ def vlstm_fw_torch_ref(
     values: torch.Tensor,
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
-    eps: float = 1e-6,
+    eps: float = 0.0,
 ) -> torch.Tensor:
     """This is the core vLSTM operation in parallel form.
     This version is stabilized. We control the range of exp() arguments by

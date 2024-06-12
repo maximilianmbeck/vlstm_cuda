@@ -60,7 +60,7 @@ def vlstm_fw_cuda(
 
 
 def vlstm_bw_cuda(
-    delta_H: torch.Tensor,
+    delta_Htilde: torch.Tensor,
     mat_Q: torch.Tensor,
     mat_K: torch.Tensor,
     mat_V: torch.Tensor,
@@ -70,7 +70,7 @@ def vlstm_bw_cuda(
     m: int,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     return cppmodule.vlstm_bw(
-        delta_H, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
+        delta_Htilde, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
     )
 
 
