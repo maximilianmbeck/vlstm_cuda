@@ -339,6 +339,8 @@ void kernel_dispatchers::vlstm_bw_dispatch(
                         (void *)&matV,
                         (void *)&iGatePreact,
                         (void *)&fGatePreact,
+                        (void *)&vecN,
+                        (void *)&vecM,
                         (void *)&batchSize,
                         (void *)&numHeads,
                         (void *)&seqLen,
