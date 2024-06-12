@@ -32,6 +32,11 @@ cppmodule = CppModule.instance()
 
 
 from .torch_impl import vlstm_fw_torch_ref as vlstm_fw_torch
+from .torch_impl import vlstm_parallel_bw_torch_w_groupnorm as vlstm_bw_torch_obw
+from .torch_impl import (
+    vlstm_parallel_fw_torch_w_groupnorm as vlstm_fwbw_torch_autogradbw,
+)
+from .torch_impl import vlstm_parallel_fwbw_torch_w_groupnorm as vlstm_fwbw_torch_obw
 
 
 def vlstm_fw_cuda(
@@ -54,6 +59,21 @@ def vlstm_fw_cuda(
     return out, n, m, mat_C
 
 
+def vlstm_bw_cuda(
+    delta_H: torch.Tensor,
+    mat_Q: torch.Tensor,
+    mat_K: torch.Tensor,
+    mat_V: torch.Tensor,
+    igate_preact: torch.Tensor,
+    fgate_preact: torch.Tensor,
+    n: int,
+    m: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    return cppmodule.vlstm_bw(
+        delta_H, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
+    )
+
+
 def vlstm_fwbw_cuda(
     mat_Q: torch.Tensor,
     mat_K: torch.Tensor,
@@ -67,11 +87,11 @@ def vlstm_fwbw_cuda(
     igate_preact = igate_preact.contiguous()
     fgate_preact = fgate_preact.contiguous()
 
-    out, mat_C = vLSTMParallelFwBwCuda.apply(
+    hs, n, m, mat_C = vLSTMParallelFwBwCuda.apply(
         mat_Q, mat_K, mat_V, igate_preact, fgate_preact
     )
 
-    return out, mat_C
+    return hs, n, m, mat_C
 
 
 class vLSTMParallelFwBwCuda(torch.autograd.Function):
@@ -89,20 +109,20 @@ class vLSTMParallelFwBwCuda(torch.autograd.Function):
             mat_Q, mat_K, mat_V, igate_preact, fgate_preact
         )
         ctx.save_for_backward(mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m)
-        return mat_H, mat_C
+        return mat_H, n, m, mat_C
 
     @staticmethod
-    def backward(ctx, delta_H: torch.Tensor, delta_C_unused: torch.Tensor):
+    def backward(
+        ctx,
+        delta_H: torch.Tensor,
+        delta_n_unused: torch.Tensor,
+        delta_m_unused: torch.Tensor,
+        delta_C_unused: torch.Tensor,
+    ):
         mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m = ctx.saved_tensors
-        # delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact = (
-        #     cppmodule.vlstm_bw(
-        #         delta_H, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
-        #     )
-        # )
-        # dummy init for now
-        delta_Q = torch.zeros_like(mat_Q)
-        delta_K = torch.zeros_like(mat_K)
-        delta_V = torch.zeros_like(mat_V)
-        delta_igate_preact = torch.zeros_like(igate_preact)
-        delta_fgate_preact = torch.zeros_like(fgate_preact)
+        delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact = (
+            cppmodule.vlstm_bw(
+                delta_H, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
+            )
+        )
         return delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact
