@@ -597,7 +597,7 @@ __global__ void kernels::vlstm_fw(scalar_t *matH, scalar_t *matC,
 
               float f_acc_subtractfrom =
                   SMEMVECTOR(fTileCol, fThreadSharedMemYIdx);
-              float d_max = f_acc_subtractfrom;
+              float d_max = -CUDART_INF_F;
               float d_val = 0.0f;
               for (uint i = 0; i < KVtileDim; ++i) {
                 //* (thread) [global] offset X-axis (KVtileDim) of dTile
