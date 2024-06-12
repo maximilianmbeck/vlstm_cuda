@@ -40,16 +40,18 @@ def vlstm_fw_cuda(
     mat_V: torch.Tensor,
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     mat_Q = mat_Q.contiguous()
     mat_K = mat_K.contiguous()
     mat_V = mat_V.contiguous()
     igate_preact = igate_preact.contiguous()
     fgate_preact = fgate_preact.contiguous()
 
-    out, mat_C = cppmodule.vlstm_fw(mat_Q, mat_K, mat_V, igate_preact, fgate_preact)
+    out, n, m, mat_C = cppmodule.vlstm_fw(
+        mat_Q, mat_K, mat_V, igate_preact, fgate_preact
+    )
 
-    return out, mat_C
+    return out, n, m, mat_C
 
 
 def vlstm_fwbw_cuda(

@@ -125,13 +125,13 @@ def vlstm_fw_tiled_torch(
             c_tile = (s_tile * torch.exp(d_tile - m)) / (n + eps)
 
             h_tile = torch.exp(m_prev - m) * (n_prev / n) * h_tile + c_tile @ v_tile
-
             m_prev = m
             l_prev = l
             n_prev = n
+        # print(m)
         h_matrix[:, :, q_idx * bq_tile_size : (q_idx + 1) * bq_tile_size, :] = h_tile
 
-    return h_matrix, m, l
+    return h_matrix, m, l, n
 
 
 # non-tiled reference implementation
@@ -220,7 +220,7 @@ def vlstm_fw_torch_ref(
 
     # retrieved values
     retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
-    return retrieved_values, max_log_D, l, log_D_matrix
+    return retrieved_values, normalizer, max_log_D, l, log_D_matrix
 
 
 def vlstm_parallel_fwbw_torch_w_groupnorm(

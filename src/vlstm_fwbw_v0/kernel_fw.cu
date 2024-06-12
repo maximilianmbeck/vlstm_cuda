@@ -172,7 +172,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStepQKV = seqLen * dimHeads;
-  const uint batchHeadStepIFgate = seqLen * 1;
+  const uint batchHeadStepIFgateNMchunk = seqLen * 1;
   const uint batchHeadStepCD = seqLen * seqLen;
   const uint numBatchHeads = batchSize * numHeads;
   // End for looplevel 0:
@@ -184,9 +184,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         (batchHeadStepQKV * gridDim.x) * batchHeadIdx +
         (batchHeadStepQKV)*blockIdx.x;
 
-    uint batchHeadGridXGlobalMemIdxIFgate =
-        (batchHeadStepIFgate * gridDim.x) * batchHeadIdx +
-        (batchHeadStepIFgate)*blockIdx.x;
+    uint batchHeadGridXGlobalMemIdxIFgateNMchunk =
+        (batchHeadStepIFgateNMchunk * gridDim.x) * batchHeadIdx +
+        (batchHeadStepIFgateNMchunk)*blockIdx.x;
 
     uint batchHeadGridXGlobalMemIdxCD =
         (batchHeadStepCD * gridDim.x) * batchHeadIdx +
@@ -376,7 +376,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
         __syncthreads();
 
-        //! construct fTileCol for dTile computation
+        //! construct fTileCol for dTile computation (do only of kvTileIdx=0)
         // TODO maybe use a parallel scan for optimization (each thread
         // basically does the same computation)
         // fTileCol is the first column of
@@ -411,11 +411,12 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             //* (grid&block) offset in f preactivations for fChunk (global
             // memory)
             const uint fChunkGridXYGlobalMemIdx =
-                batchHeadGridXGlobalMemIdxIFgate + (1 * QtileDim) * fChunkIdx;
+                batchHeadGridXGlobalMemIdxIFgateNMchunk +
+                (1 * QtileDim) * fChunkIdx;
             const uint fChunkBlockGlobalMemIdx =
                 fChunkGridXYGlobalMemIdx; //+ (1 * QtileDim) * blockIdx.y;
 
-            //? loading fChunk into shared memory with threadblocks
+            //! loading fChunk into shared memory with threadblocks
             for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
                  ++fWarpChunkIdx) {
               //? f idxes
@@ -450,7 +451,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             }
             __syncthreads();
 
-            //? sum up fgates for dTile
+            //! sum up fgates for dTile
             // the very first forgetgate index must be f_2
             for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
                  ++fWarpChunkIdx) {
@@ -546,7 +547,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         // memory)
         // every thread block loads the same i&f preactivations
         const uint ifChunkBlockXYGlobalMemIdx =
-            batchHeadGridXGlobalMemIdxIFgate + (1 * KVtileDim) * kvTileIdx;
+            batchHeadGridXGlobalMemIdxIFgateNMchunk +
+            (1 * KVtileDim) * kvTileIdx;
 
         // Y: seqLen (or KVtileDim), X: 1
         // we only load the fGatePreacts for the current kvTileIdx
@@ -596,7 +598,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
             float f_acc_subtractfrom =
                 SMEMVECTOR(fTileCol, fThreadSharedMemYIdx);
-            float d_max = f_acc_subtractfrom;
+            float d_max = -CUDART_INF_F; // init to -inf, so first max is
+                                         // always larger than -inf
             float d_val = 0.0f;
             for (uint i = 0; i < KVtileDim; ++i) {
               //* (thread) [global] offset X-axis (KVtileDim) of dTile
@@ -791,6 +794,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             for (uint i = 0; i < KVtileDim; ++i) {
               const uint cTileGlobalThreadXIdx = cTileBlockXIdx + i;
               if (cTileGlobalThreadXIdx > cTileGlobalThreadYIdx) {
+                // values above the main diagonal in D' are 0
                 SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) =
                     dscalar_zero<scalar_t>();
               } else {
@@ -833,7 +837,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             }
 #endif
           }
-        }
+        } // end: lWarpChunkIdx
         __syncthreads();
 
         // TODO Do we need to store lChunk in global memory for backward? What
@@ -936,7 +940,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 SMEMVECTOR(nChunk, lThreadSharedMemYIdx);
           }
         }
-      }
+      } // end looplevel 2: kvTileIdx
 
       // TODO sync all blocks here, necessary? The loop above has different
       // number of iterations for each block
@@ -971,9 +975,40 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
       }
       __syncthreads();
-    }
-  }
-}
+
+      //* global memory:
+      const uint nmChunkGridXYGlobalMemIdx =
+          batchHeadGridXGlobalMemIdxIFgateNMchunk +
+          (1 * QtileDim * gridDim.y) * qTileIdx;
+      const uint nmChunkBlockGlobalMemIdx =
+          nmChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
+
+      //! write nChunk and mChunk to global memory
+      const uint nmChunkYEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+      for (uint nmChunkYIdx = 0; nmChunkYIdx < nmChunkYEnd; ++nmChunkYIdx) {
+        //? n&m idxes
+        //* shared memory:
+        const uint nmThreadSharedMemYIdx =
+            flatThreadIdx + blockDim.x * blockDim.y * nmChunkYIdx;
+        //* global memory:
+        const uint nmThreadGlobalMemIdx =
+            nmChunkBlockGlobalMemIdx + nmThreadSharedMemYIdx;
+
+        if (nmThreadSharedMemYIdx < QtileDim) {
+          // write nChunk and mChunk to global memory
+          vecN[nmThreadGlobalMemIdx] =
+              SMEMVECTOR(nChunk, nmThreadSharedMemYIdx);
+          vecM[nmThreadGlobalMemIdx] =
+              SMEMVECTOR(mChunk, nmThreadSharedMemYIdx);
+
+          // optionally write lChunk to global memory and compute nChunk from
+          // mChunk and lChunk
+        }
+      }
+    } // end looplevel 1: qTileIdx
+    __syncthreads();
+  } // end looplevel 0: batchHeadIdx
+} // end vlstm_fw() kernel
 
 template <typename scalar_t>
 void kernel_dispatchers::vlstm_fw_dispatch(
