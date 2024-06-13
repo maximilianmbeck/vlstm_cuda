@@ -86,17 +86,18 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
       (threadIdx.y == 0)) {
-    printf("In Kernel: gdim.x: %d, gdim.y: %d, gdim.z: %d, bdim.x: %d, bdim.y: "
-           "%d\n",
-           gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y);
+    printf(
+        "In FW-Kernel: gdim.x: %d, gdim.y: %d, gdim.z: %d, bdim.x: %d, bdim.y: "
+        "%d\n",
+        gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y);
   }
 #endif
 
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
       (threadIdx.y == 0)) {
-    printf("In Kernel: QtileDim: %d, KVtileDim: %d, TblockDim:%d\n", QtileDim,
-           KVtileDim, TblockDim);
+    printf("In FW-Kernel: QtileDim: %d, KVtileDim: %d, TblockDim:%d\n",
+           QtileDim, KVtileDim, TblockDim);
   }
 #endif
   cg::grid_group gridGroup = cg::this_grid();
@@ -1045,15 +1046,18 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO understand how memory padding works!
   // Why at innermost dim? Because memory is organized consecutively
   // we are storing the following tiles in shared memory:
-  // - Input tiles: qTile, vTile, kTile -> (QtileDim, dimHeads +
+  // - Input tiles: qTile -> (QtileDim, dimHeads +
+  // SHARED_MEM_PADDING), vTile, kTile -> (KVtileDim, dimHeads +
   // SHARED_MEM_PADDING)
   // TODO from here add input & forgetgate tiles
   // - Intermediate result tile: cTile, dTile -> (QtileDim, KVtileDim +
   // SHARED_MEM_PADDING)
   // - Output tile: hTile -> (QtileDim, dimHeads + SHARED_MEM_PADDING)
 
-  const uint qkvhTileSharedMemSize =
+  const uint qhTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (dimHeads + SHARED_MEM_PADDING);
+  const uint kvTileSharedMemSize =
+      sizeof(scalar_t) * KVtileDim * (dimHeads + SHARED_MEM_PADDING);
   const uint cdTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
 
@@ -1086,10 +1090,11 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // Intermediate tiles: 2x for cTile, dTile
   // Intermediate tiles: 2x for mChunk, lChunk
   const uint sharedMemorySize =
-      4 * qkvhTileSharedMemSize + 2 * cdTileSharedMemSize +
-      iChunkSharedMemSize + fChunkSharedMemSize + fTileColSharedMemSize +
-      2 * mChunkSharedMemSize + 2 * lChunkSharedMemSize +
-      2 * nChunkSharedMemSize + fTileColLastSharedMemSize;
+      2 * qhTileSharedMemSize + 2 * kvTileSharedMemSize +
+      2 * cdTileSharedMemSize + iChunkSharedMemSize + fChunkSharedMemSize +
+      fTileColSharedMemSize + 2 * mChunkSharedMemSize +
+      2 * lChunkSharedMemSize + 2 * nChunkSharedMemSize +
+      fTileColLastSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
