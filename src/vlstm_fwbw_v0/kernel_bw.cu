@@ -11,6 +11,7 @@
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 #include <math_constants.h>
+#include <sys/types.h>
 
 #include "../util/cuda_errorcheck.h"
 #include "../util/inline_ops.cuh"
@@ -19,6 +20,7 @@
 #include "kernel_dispatchers.h"
 
 #define CEIL_DIV(a, b) (((a) + (b)-1) / (b))
+#define FLOOR_DIV(a, b) ((a) / (b))
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
@@ -207,24 +209,42 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
 
     //! PARALLELIZE ALONG SEQLEN (gridDim.y)
+    // looplevel 1 (j-loop): loop over KVtile blocks along seqLen dim
     // Ends for looplevel 1:
-    const uint qTileEnd = CEIL_DIV(seqLen, QtileDim * gridDim.y);
-    // looplevel 1: loop over Qtile blocks along seqLen dim
-    for (uint qTileIdx = 0; qTileIdx < qTileEnd; ++qTileIdx) {
+    const uint kvTileEnd = CEIL_DIV(seqLen, KVtileDim * gridDim.y);
+    for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
 
       //* qTile Global Memory Index
-      // (grid&block) offset in Q matrix for qTile (global memory)
-      const uint qTileGridXYGlobalMemIdx =
+      // (grid&block) offset in K,V matrix for qTile (global memory)
+      const uint kvTileGridXYGlobalMemIdx =
           batchHeadGridXGlobalMemIdxQKV +
-          (dimHeads * QtileDim * gridDim.y) * qTileIdx;
-      const uint qTileBlockGlobalMemIdx =
-          qTileGridXYGlobalMemIdx + (dimHeads * QtileDim) * blockIdx.y;
+          (dimHeads * KVtileDim * gridDim.y) * kvTileIdx;
+      const uint kvTileBlockGlobalMemIdx =
+          kvTileGridXYGlobalMemIdx + (dimHeads * KVtileDim) * blockIdx.y;
 
-      //* cTile Global Memory Index (virtual, as never materialized fully)
+      //* sTile Global Memory Index (virtual, as never materialized fully)
       // (grid&block) offset Y-axis in S = Q*K^T matrix (along sequence
       // dimension) (used for checking causality)
-      const uint cTileGridYIdx = QtileDim * gridDim.y * qTileIdx;
-      const uint cTileBlockYIdx = cTileGridYIdx + QtileDim * blockIdx.y;
+      // Note: we add "Xdim" to the name to indicate that this is the
+      // corresponding x/column-dimension in the S matrix (differs from the
+      // gridDim.y)
+      const uint sTileXdimGridYIdx = KVtileDim * gridDim.y * kvTileIdx;
+      const uint sTileXdimBlockYIdx =
+          sTileXdimGridYIdx + KVtileDim * blockIdx.y;
+
+      //! Load iChunk & fChunk, Init deltaIChunk & deltaFChunk to zero in SRAM
+      // TODO
+      //! Load kTile & vTile, Init deltaKTile & deltaVTile to zero in SRAM
+      // TODO
+
+      // looplevel 2 (i-loop): loop over QTile blocks along seqLen dim
+      const uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
+      uint jIdx = blockIdx.y + kvTileIdx * gridDim.y;
+      uint qTileStart = FLOOR_DIV(jIdx * KVtileDim, QtileDim);
+      for (uint qTileIdx = qTileStart; qTileIdx < qTileEnd; ++qTileIdx) {
+        //! Load nChunk & mChunk in SRAM
+        // TODO from here
+      } // end looplevel 2
 
     } // end looplevel 1
   }   // end looplevel 0
