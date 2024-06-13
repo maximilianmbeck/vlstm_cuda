@@ -243,11 +243,49 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       uint qTileStart = FLOOR_DIV(jIdx * KVtileDim, QtileDim);
       for (uint qTileIdx = qTileStart; qTileIdx < qTileEnd; ++qTileIdx) {
         //! Load nChunk & mChunk in SRAM
-        // TODO from here
-      } // end looplevel 2
+        // TODO
+        //! Load qTile & deltaHTile in SRAM
+        // TODO
 
-    } // end looplevel 1
-  }   // end looplevel 0
+        //! Compute deltaCTile = deltaHtile  vTile^T (and divide by nChunk)
+        // TODO
+
+        //! Compute sTile = (qTile  kTile^T) * (1/sqrt(d))
+        // TODO
+
+        //! Compute dDtile = deltaCTile * sTile
+        // TODO
+
+        //! sum up deltaIChunk & deltaFChunk and update in SRAM
+        // TODO
+
+        //! Construct D'Tile from fChunk and iChunk
+        // TODO
+
+        //! Compute pTile = deltaCTile * D'Tile
+        // TODO
+
+        //! Compute deltaQTile = pTile  (kTile/sqrt(d))
+        // TODO
+
+        //! Atomic add deltaQTile to deltaQ in HBM (HOW TO DO??)
+        // TODO check how to do this
+
+        //! Compute deltaKTile = pTile^T  (qTile/sqrt(d)) and update in SRAM
+        // TODO
+
+        //! Compute rTile = sTile * D'Tile
+        // TODO
+
+        //! Compute deltaVTile = rTile^T  deltaHTile and update in SRAM
+        // TODO
+      } // end looplevel 2 (i-loop)
+        //! Store deltaKTile & deltaVTile in HBM
+        // TODO
+        //! Store deltaIChunk & deltaFChunk in HBM
+        // TODO
+    }   // end looplevel 1 (j-loop)
+  }     // end looplevel 0
 } // kernels::vlstm_fw
 
 template <typename scalar_t>
