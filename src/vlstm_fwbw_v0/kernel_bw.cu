@@ -90,7 +90,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
       (threadIdx.y == 0)) {
     printf(
-        "In KKernel: gdim.x: %d, gdim.y: %d, gdim.z: %d, bdim.x: %d, bdim.y: "
+        "In BW-Kernel: gdim.x: %d, gdim.y: %d, gdim.z: %d, bdim.x: %d, bdim.y: "
         "%d\n",
         gridDim.x, gridDim.y, gridDim.z, blockDim.x, blockDim.y);
   }
@@ -99,8 +99,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
       (threadIdx.y == 0)) {
-    printf("In Kernel: QtileDim: %d, KVtileDim: %d, TblockDim:%d\n", QtileDim,
-           KVtileDim, TblockDim);
+    printf("In BW-Kernel: QtileDim: %d, KVtileDim: %d, TblockDim:%d\n",
+           QtileDim, KVtileDim, TblockDim);
   }
 #endif
   cg::grid_group gridGroup = cg::this_grid();
@@ -109,70 +109,70 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   // the data in this shared memory is shared across all threads in a thread
   // block
   extern __shared__ float sbuf[]; // declare it as float and redefine it later
-
-  //? for inputs
   // Note: keep in mind the memory is defined in a contiguous region.
   // One pointer has the full memory space until the next point is defined.
   // Therefore to read the size of a single shared memory array you need to
   // have a look at the offset for the next array.
 
-  // qtile (QtileDim x dimHeads) in shared memory (padding for alignment)
+  //? input-output tiles
+  //* (QtileDim x dimHeads) tiles:
+  // qTile (QTileDim x dimHeads)
   scalar_t *qTile = (scalar_t *)sbuf;
-  // kTile and vTile (KVtileDim x dimHeads) in shared memory
-  scalar_t *kTile =
+  // deltaQTile (QTileDim x dimHeads)
+  scalar_t *deltaQTile =
       (scalar_t *)&qTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
+  // deltaHTile (QTileDim x dimHeads)
+  scalar_t *deltaHTile =
+      (scalar_t *)&deltaQTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
+
+  //* (QtileDim x 1) chunks:
+  // nChunk (QTileDim x 1)
+  scalar_t *nChunk =
+      (scalar_t *)&deltaHTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
+  // mChunk (QTileDim x 1)
+  scalar_t *mChunk = (scalar_t *)&nChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+
+  //* (KVtileDim x dimHeads) tiles:
+  // kTile (KVtileDim x dimHeads)
+  scalar_t *kTile = (scalar_t *)&mChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  // vTile (KVtileDim x dimHeads)
   scalar_t *vTile =
       (scalar_t *)&kTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
-
-  //? for intermediate results
-  // init cTile (QtileDim x KVTileDim) in shared memory for intermediate
-  // result of QK^T
-  scalar_t *cTile =
+  // deltaKTile (KVtileDim x dimHeads)
+  scalar_t *deltaKTile =
       (scalar_t *)&vTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
-  // init result hTile (QTileDim x dimHeads) in shared memory
-  scalar_t *hTile =
-      (scalar_t *)&cTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
-  // init dTile (QTileDim x KVTileDim) in shared memory for forget and input
-  // gate matrix
-  scalar_t *dTile =
-      (scalar_t *)&hTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
+  // deltaVTile (KVtileDim x dimHeads)
+  scalar_t *deltaVTile =
+      (scalar_t *)&deltaKTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
 
-  //? for input and forget gate
-  // init iChunk (KVTileDim x 1) in shared memory for input gate
+  //* (KVtileDim x 1) chunks:
+  // iChunk (KVtileDim x 1)
   scalar_t *iChunk =
-      (scalar_t *)&dTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
-  // init fChunk (QTileDim x 1) in shared memory for forget gate
+      (scalar_t *)&deltaVTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
+  // fChunk (KVtileDim x 1)
   scalar_t *fChunk = (scalar_t *)&iChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
-  // init fTileCol (QTileDim x 1) in shared memory for forget gate (first column
-  // of the QtileDim x KVtileDim dTile)
-  float *fTileCol = (float *)&fChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  // deltaIChunk (KVtileDim x 1)
+  scalar_t *deltaIChunk =
+      (scalar_t *)&fChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
+  // deltaFChunk (KVtileDim x 1)
+  scalar_t *deltaFChunk =
+      (scalar_t *)&deltaIChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
 
-  // init mChunk (QTileDim x 1) in shared memory for max state of
-  // dTile
-  scalar_t *mChunk = (scalar_t *)&fTileCol[QtileDim * (1 + SHARED_MEM_PADDING)];
-  // init mPrevTileCol (QTileDim x 1) in shared memory for previous
-  // max state of dTile
-  scalar_t *mPrevChunk =
-      (scalar_t *)&mChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
-  // init lChunk (QTileDim x 1) in shared memory for rowsum of cTile * dTile
-  scalar_t *lChunk =
-      (scalar_t *)&mPrevChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
-  // init lPrevChunk (QTileDim x 1) in shared memory for previous rowsum of
-  // cTile * dTile
-  scalar_t *lPrevChunk =
-      (scalar_t *)&lChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
-  // init nChunk (QTileDim x 1) in shared memory for normalizer state
-  scalar_t *nChunk =
-      (scalar_t *)&lPrevChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
-  // init nPrevChunk (QTileDim x 1) in shared memory for previous normalizer
-  // state
-  scalar_t *nPrevChunk =
-      (scalar_t *)&nChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  //? intermediate tiles
+  //* (QtileDim x KVtileDim) tiles:
+  // sTile (QtileDim x KVtileDim)
+  scalar_t *sTile =
+      (scalar_t *)&deltaFChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
+  // dddTile (QtileDim x KVtileDim)
+  scalar_t *dddTile =
+      (scalar_t *)&sTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
+  // dcprTile (QtileDim x KVtileDim)
+  scalar_t *dcprTile =
+      (scalar_t *)&dddTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
-  // init fTileColLast (1 x 1) in shared memory for forget gate (last row value
-  // of fTileCol)
-  float *fTileColLast =
-      (float *)&lPrevChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  //* (KVtileDim x 1) chunks:
+  float *fRowChunk =
+      (float *)&dcprTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStepQKV = seqLen * dimHeads;
@@ -205,8 +205,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
              batchHeadGridXGlobalMemIdxQKV);
     }
 #endif
-    SMEMVECTOR(fTileColLast, 0) =
-        float2type<float>(0.0f); // could also just write 0.0f
 
     //! PARALLELIZE ALONG SEQLEN (gridDim.y)
     // Ends for looplevel 1:
@@ -267,18 +265,12 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   //! calculate dynamic shared memory size
   // TODO understand how memory padding works!
   // Why at innermost dim? Because memory is organized consecutively
-  // we are storing the following tiles in shared memory:
-  // - Input tiles: qTile, vTile, kTile -> (QtileDim, dimHeads +
-  // SHARED_MEM_PADDING)
-  // TODO from here add input & forgetgate tiles
-  // - Intermediate result tile: cTile, dTile -> (QtileDim, KVtileDim +
-  // SHARED_MEM_PADDING)
-  // - Output tile: hTile -> (QtileDim, dimHeads + SHARED_MEM_PADDING)
 
-  const uint qkvhTileSharedMemSize =
+  //? input-output tiles
+  const uint qdQdHTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (dimHeads + SHARED_MEM_PADDING);
-  const uint cdTileSharedMemSize =
-      sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
+  const uint kvdKdVTileSharedMemSize =
+      sizeof(scalar_t) * KVtileDim * (dimHeads + SHARED_MEM_PADDING);
 
   // See here:
   // https://docs.nvidia.com/cuda/cuda-c-programming-guide/index.html#device-memory-accesses
@@ -287,32 +279,27 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   // to access the same input and forget gate values at the same time for the
   // gate matrix computation
   // TODO check if this is really helping!
-  const uint iChunkSharedMemSize =
+  const uint ifdidfChunkSharedMemSize =
       sizeof(scalar_t) * KVtileDim * (1 + SHARED_MEM_PADDING);
-  const uint fChunkSharedMemSize =
+
+  const uint nmChunkSharedMemSize =
       sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
+
+  //? intermediate tiles
+  const uint sdprdcddTileSharedMemSize =
+      sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
 
   // we keep these as float as it acts as accumulator
-  const uint fTileColSharedMemSize =
-      sizeof(float) * QtileDim * (1 + SHARED_MEM_PADDING);
-  const uint fTileColLastSharedMemSize =
-      sizeof(float) * 1 * (1 + SHARED_MEM_PADDING);
-
-  const uint mChunkSharedMemSize =
-      sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
-  const uint lChunkSharedMemSize =
-      sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
-  const uint nChunkSharedMemSize =
-      sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
+  const uint fTileRowSharedMemSize =
+      sizeof(float) * KVtileDim * (1 + SHARED_MEM_PADDING);
 
   // Input/Output tiles: 4x for qTile, vTile, kTile, hTile
   // Intermediate tiles: 2x for cTile, dTile
   // Intermediate tiles: 2x for mChunk, lChunk
   const uint sharedMemorySize =
-      4 * qkvhTileSharedMemSize + 2 * cdTileSharedMemSize +
-      iChunkSharedMemSize + fChunkSharedMemSize + fTileColSharedMemSize +
-      2 * mChunkSharedMemSize + 2 * lChunkSharedMemSize +
-      2 * nChunkSharedMemSize + fTileColLastSharedMemSize;
+      3 * qdQdHTileSharedMemSize + 4 * kvdKdVTileSharedMemSize +
+      4 * ifdidfChunkSharedMemSize + 2 * nmChunkSharedMemSize +
+      3 * sdprdcddTileSharedMemSize + 1 * fTileRowSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
