@@ -109,7 +109,7 @@ interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV, Tensor iGatePreact,
   return std::make_tuple(matH, vecN, vecM, matC);
 }
 
-std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor>
+std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor, Tensor>
 interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
                     Tensor iGatePreact, Tensor fGatePreact, Tensor vecN,
                     Tensor vecM) {
@@ -156,6 +156,10 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
   auto deltaFGatePreact =
       torch::zeros({batchSize, numHeads, seqLen}, fGatePreact.options());
 
+  // only for debugging: C or D matrix (S x S) (will be removed later)
+  auto matC =
+      torch::zeros({batchSize, numHeads, seqLen, seqLen}, matQ.options());
+
   AT_DISPATCH_FLOATING_TYPES_AND_HALF2(
       matQ.scalar_type(), "vLSTMBw", ([&] {
         if (std::is_same<scalar_t, at::BFloat16>::value) {
@@ -168,6 +172,7 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
                   deltaIGatePreact.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(
                   deltaFGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(deltaH.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matK.data_ptr<scalar_t>()),
@@ -187,6 +192,7 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
               reinterpret_cast<__half *>(deltaV.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(deltaIGatePreact.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(deltaFGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(deltaH.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matK.data_ptr<scalar_t>()),
@@ -204,6 +210,7 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
               reinterpret_cast<float *>(deltaV.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(deltaIGatePreact.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(deltaFGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(deltaH.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matK.data_ptr<scalar_t>()),
@@ -219,7 +226,7 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
       }));
 
   return std::make_tuple(deltaQ, deltaK, deltaV, deltaIGatePreact,
-                         deltaFGatePreact);
+                         deltaFGatePreact, matC);
 }
 
 } // namespace vlstm

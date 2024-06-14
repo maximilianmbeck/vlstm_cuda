@@ -33,8 +33,8 @@ namespace kernels {
 template <typename scalar_t, int TblockDim, int QblockDim, int KVblockDim>
 __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                          scalar_t *deltaIGatePreact, scalar_t *deltaFGatePreact,
-                         scalar_t *deltaH, scalar_t *matQ, scalar_t *matK,
-                         scalar_t *matV, scalar_t *iGatePreact,
+                         scalar_t *matC, scalar_t *deltaH, scalar_t *matQ,
+                         scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
                          scalar_t *fGatePreact, scalar_t *vecN, scalar_t *vecM,
                          int batchSize, int numHeads, int seqLen, int dimHeads);
 
@@ -83,10 +83,10 @@ template <typename scalar_t, int TblockDim, int QtileDim, int KVtileDim>
 __global__ void
 kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                   scalar_t *deltaIGatePreact, scalar_t *deltaFGatePreact,
-                  scalar_t *deltaH, scalar_t *matQ, scalar_t *matK,
-                  scalar_t *matV, scalar_t *iGatePreact, scalar_t *fGatePreact,
-                  scalar_t *vecN, scalar_t *vecM, int batchSize, int numHeads,
-                  int seqLen, int dimHeads) {
+                  scalar_t *matC, scalar_t *deltaH, scalar_t *matQ,
+                  scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
+                  scalar_t *fGatePreact, scalar_t *vecN, scalar_t *vecM,
+                  int batchSize, int numHeads, int seqLen, int dimHeads) {
   // int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
@@ -387,7 +387,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
 
         //! Compute deltaCTile = deltaHtile  vTile^T (and divide by nChunk)
-        // TODO
 
         //! Compute sTile = (qTile  kTile^T) * (1/sqrt(d))
         // TODO
@@ -430,10 +429,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 template <typename scalar_t>
 void kernel_dispatchers::vlstm_bw_dispatch(
     scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
-    scalar_t *deltaIGatePreact, scalar_t *deltaFGatePreact, scalar_t *deltaH,
-    scalar_t *matQ, scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
-    scalar_t *fGatePreact, scalar_t *vecN, scalar_t *vecM, int batchSize,
-    int numHeads, int seqLen, int dimHeads) {
+    scalar_t *deltaIGatePreact, scalar_t *deltaFGatePreact, scalar_t *matC,
+    scalar_t *deltaH, scalar_t *matQ, scalar_t *matK, scalar_t *matV,
+    scalar_t *iGatePreact, scalar_t *fGatePreact, scalar_t *vecN,
+    scalar_t *vecM, int batchSize, int numHeads, int seqLen, int dimHeads) {
   printf("B: %d, NH: %d, S: %d, DH: %d\n", batchSize, numHeads, seqLen,
          dimHeads);
   const int TblockDim = TBLOCK_DIM; // matmul blockdim
@@ -490,9 +489,6 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   const uint fTileRowSharedMemSize =
       sizeof(float) * KVtileDim * (1 + SHARED_MEM_PADDING);
 
-  // Input/Output tiles: 4x for qTile, vTile, kTile, hTile
-  // Intermediate tiles: 2x for cTile, dTile
-  // Intermediate tiles: 2x for mChunk, lChunk
   const uint sharedMemorySize =
       3 * qdQdHTileSharedMemSize + 4 * kvdKdVTileSharedMemSize +
       4 * ifdidfChunkSharedMemSize + 2 * nmChunkSharedMemSize +
@@ -517,6 +513,7 @@ void kernel_dispatchers::vlstm_bw_dispatch(
                         (void *)&deltaV,
                         (void *)&deltaIGatePreact,
                         (void *)&deltaFGatePreact,
+                        (void *)&matC,
                         (void *)&deltaH,
                         (void *)&matQ,
                         (void *)&matK,
@@ -547,18 +544,20 @@ void kernel_dispatchers::vlstm_bw_dispatch(
 template void kernel_dispatchers::vlstm_bw_dispatch<__nv_bfloat16>(
     __nv_bfloat16 *deltaQ, __nv_bfloat16 *deltaK, __nv_bfloat16 *deltaV,
     __nv_bfloat16 *deltaIGatePreact, __nv_bfloat16 *deltaFGatePreact,
-    __nv_bfloat16 *deltaH, __nv_bfloat16 *matQ, __nv_bfloat16 *matK,
-    __nv_bfloat16 *matV, __nv_bfloat16 *iGatePreact, __nv_bfloat16 *fGatePreact,
-    __nv_bfloat16 *vecN, __nv_bfloat16 *vecM, int batchSize, int numHeads,
-    int seqLen, int dimHeads);
+    __nv_bfloat16 *matC, __nv_bfloat16 *deltaH, __nv_bfloat16 *matQ,
+    __nv_bfloat16 *matK, __nv_bfloat16 *matV, __nv_bfloat16 *iGatePreact,
+    __nv_bfloat16 *fGatePreact, __nv_bfloat16 *vecN, __nv_bfloat16 *vecM,
+    int batchSize, int numHeads, int seqLen, int dimHeads);
 template void kernel_dispatchers::vlstm_bw_dispatch<__half>(
     __half *deltaQ, __half *deltaK, __half *deltaV, __half *deltaIGatePreact,
-    __half *deltaFGatePreact, __half *deltaH, __half *matQ, __half *matK,
-    __half *matV, __half *iGatePreact, __half *fGatePreact, __half *vecN,
-    __half *vecM, int batchSize, int numHeads, int seqLen, int dimHeads);
+    __half *deltaFGatePreact, __half *matC, __half *deltaH, __half *matQ,
+    __half *matK, __half *matV, __half *iGatePreact, __half *fGatePreact,
+    __half *vecN, __half *vecM, int batchSize, int numHeads, int seqLen,
+    int dimHeads);
 template void kernel_dispatchers::vlstm_bw_dispatch<float>(
     float *deltaQ, float *deltaK, float *deltaV, float *deltaIGatePreact,
-    float *deltaFGatePreact, float *deltaH, float *matQ, float *matK,
-    float *matV, float *iGatePreact, float *fGatePreact, float *vecN,
-    float *vecM, int batchSize, int numHeads, int seqLen, int dimHeads);
+    float *deltaFGatePreact, float *matC, float *deltaH, float *matQ,
+    float *matK, float *matV, float *iGatePreact, float *fGatePreact,
+    float *vecN, float *vecM, int batchSize, int numHeads, int seqLen,
+    int dimHeads);
 } // namespace vlstm

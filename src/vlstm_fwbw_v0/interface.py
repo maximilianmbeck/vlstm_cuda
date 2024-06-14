@@ -68,7 +68,9 @@ def vlstm_bw_cuda(
     fgate_preact: torch.Tensor,
     n: int,
     m: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> tuple[
+    torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
+]:
     return cppmodule.vlstm_bw(
         delta_Htilde, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
     )
@@ -120,7 +122,7 @@ class vLSTMParallelFwBwCuda(torch.autograd.Function):
         delta_C_unused: torch.Tensor,
     ):
         mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m = ctx.saved_tensors
-        delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact = (
+        delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact, mat_C = (
             cppmodule.vlstm_bw(
                 delta_H, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
             )
