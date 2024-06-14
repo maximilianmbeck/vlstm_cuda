@@ -1,6 +1,7 @@
 // Copyright JKU Linz 2024
 // Author: Maximilian Beck
 
+#include <__clang_cuda_builtin_vars.h>
 #include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda.h>
@@ -473,7 +474,54 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         // Done with the pointwise multiplication in the previous step
 
         //! DEBUG: write dDtile to global memory
-        // TODO
+        // left upper corner of cWarpTileBlock in C (global memory)
+        //* cdTile Global Memory Index (Debug only)
+        const uint cdTileGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxCD + (seqLen * QtileDim) * qTileIdx;
+        const uint cdTileBlockGlobalMemIdx =
+            cdTileGridXYGlobalMemIdx + (kvTileIdx * KVtileDim * gridDim.y) +
+            (1 * KVtileDim) * blockIdx.y;
+
+        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+             ++cdWarpTileYIdx) {
+          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+               ++cdWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpTileThreadSharedMemYIdx =
+                blockDim.y * cdWarpTileYIdx + threadIdx.y;
+            const uint cdWarpTileThreadSharedMemXIdx =
+                blockDim.x * cdWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            const uint cdWarpTileBlockGlobalMemIdx =
+                cdTileBlockGlobalMemIdx +
+                (seqLen * blockDim.y) * cdWarpTileYIdx +
+                blockDim.x * cdWarpTileXIdx;
+            const uint cdWarpTileThreadGlobalMemIdx =
+                cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
+                threadIdx.x;
+
+            matC[cdWarpTileThreadGlobalMemIdx] =
+                SMEMARRAY(dddTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                          cdWarpTileThreadSharedMemXIdx);
+#ifdef DEBUG10
+            if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                (threadIdx.x == 0 && threadIdx.y == 0)) {
+              printf("qTileIdx=%d, kvTileIdx=%d, cTileBlockXIdx=%d, "
+                     "cTileBlockYIdx=%d, dTileThreadXYIdx=(%d,%d), "
+                     "d_val=%f\n",
+                     qTileIdx, kvTileIdx, cTileBlockXIdx, cTileBlockYIdx,
+                     cdWarpTileThreadSharedMemXIdx,
+                     cdWarpTileThreadSharedMemYIdx,
+                     type2float(SMEMARRAY(dTile, KVtileDim,
+                                          cdWarpTileThreadSharedMemYIdx,
+                                          cdWarpTileThreadSharedMemXIdx)));
+            }
+#endif
+          }
+        }
 
         //! sum up deltaIChunk & deltaFChunk and update in SRAM
         // TODO
