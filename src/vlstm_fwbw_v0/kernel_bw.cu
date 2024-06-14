@@ -1,6 +1,7 @@
 // Copyright JKU Linz 2024
 // Author: Maximilian Beck
 
+#include <__clang_cuda_builtin_vars.h>
 #include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda.h>
@@ -176,9 +177,12 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   float *fRowChunk =
       (float *)&dcprTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
+  //? flatten the threads to 1D
+  const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
+
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
-  const uint batchHeadStepQKV = seqLen * dimHeads;
-  const uint batchHeadStepIFgate = seqLen * 1;
+  const uint batchHeadStepQKVdH = seqLen * dimHeads;
+  const uint batchHeadStepIFNMgate = seqLen * 1;
   const uint batchHeadStepCD = seqLen * seqLen;
   const uint numBatchHeads = batchSize * numHeads;
   // End for looplevel 0:
@@ -186,13 +190,14 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   // looplevel 0: loop over batches and heads
   for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd; ++batchHeadIdx) {
 
-    uint batchHeadGridXGlobalMemIdxQKV =
-        (batchHeadStepQKV * gridDim.x) * batchHeadIdx +
-        (batchHeadStepQKV)*blockIdx.x;
+    // dQ, dK, dV also have this index
+    uint batchHeadGridXGlobalMemIdxQKVdH =
+        (batchHeadStepQKVdH * gridDim.x) * batchHeadIdx +
+        (batchHeadStepQKVdH)*blockIdx.x;
 
-    uint batchHeadGridXGlobalMemIdxIFgate =
-        (batchHeadStepIFgate * gridDim.x) * batchHeadIdx +
-        (batchHeadStepIFgate)*blockIdx.x;
+    uint batchHeadGridXGlobalMemIdxIFNMgate =
+        (batchHeadStepIFNMgate * gridDim.x) * batchHeadIdx +
+        (batchHeadStepIFNMgate)*blockIdx.x;
 
     uint batchHeadGridXGlobalMemIdxCD =
         (batchHeadStepCD * gridDim.x) * batchHeadIdx +
@@ -214,10 +219,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
     const uint kvTileEnd = CEIL_DIV(seqLen, KVtileDim * gridDim.y);
     for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
 
-      //* qTile Global Memory Index
-      // (grid&block) offset in K,V matrix for qTile (global memory)
+      //* kTile, vTile Global Memory Index
+      // (grid&block) offset in K,V matrix for kTile&vTile (global memory)
       const uint kvTileGridXYGlobalMemIdx =
-          batchHeadGridXGlobalMemIdxQKV +
+          batchHeadGridXGlobalMemIdxQKVdH +
           (dimHeads * KVtileDim * gridDim.y) * kvTileIdx;
       const uint kvTileBlockGlobalMemIdx =
           kvTileGridXYGlobalMemIdx + (dimHeads * KVtileDim) * blockIdx.y;
@@ -232,20 +237,155 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       const uint sTileXdimBlockYIdx =
           sTileXdimGridYIdx + KVtileDim * blockIdx.y;
 
+      const uint ifChunkGridXYGlobalMemIdx =
+          batchHeadGridXGlobalMemIdxIFNMgate +
+          (1 * KVtileDim * gridDim.y) * kvTileIdx;
+      const uint ifChunkBlockGlobalMemIdx =
+          ifChunkGridXYGlobalMemIdx + (1 * KVtileDim) * blockIdx.y;
+
       //! Load iChunk & fChunk, Init deltaIChunk & deltaFChunk to zero in SRAM
-      // TODO
+      const uint ifChunkEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
+      for (uint ifChunkIdx = 0; ifChunkIdx < ifChunkEnd; ++ifChunkIdx) {
+        //? if idxes
+        //* shared memory
+        const uint ifThreadSharedMemIdx =
+            flatThreadIdx + blockDim.x * blockDim.y * ifChunkIdx;
+        //* global memory
+        const uint ifThreadGlobalMemIdx =
+            ifChunkBlockGlobalMemIdx + flatThreadIdx;
+
+        if (ifThreadSharedMemIdx < KVtileDim) {
+          SMEMVECTOR(iChunk, ifThreadSharedMemIdx) =
+              iGatePreact[ifThreadGlobalMemIdx];
+          SMEMVECTOR(fChunk, ifThreadSharedMemIdx) =
+              logsigmoid_g(fGatePreact[ifThreadGlobalMemIdx]);
+          // without logsigmoid for debugging only:
+          //   SMEMVECTOR(fChunk, ifThreadSharedMemIdx) =
+          //       fGatePreact[ifThreadGlobalMemIdx];
+          SMEMVECTOR(deltaIChunk, ifThreadSharedMemIdx) =
+              dscalar_zero<scalar_t>();
+          SMEMVECTOR(deltaFChunk, ifThreadSharedMemIdx) =
+              dscalar_zero<scalar_t>();
+        }
+      }
+      __syncthreads();
+
       //! Load kTile & vTile, Init deltaKTile & deltaVTile to zero in SRAM
-      // TODO
+      // loops over rows (outer) and columns (inner) of kTile and vTile
+      const uint kvWarpTileYEnd = CEIL_DIV(KVtileDim, blockDim.y); // rows
+      const uint kvWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);  // cols
+      for (uint kvWarpTileYIdx = 0; kvWarpTileYIdx < kvWarpTileYEnd;
+           ++kvWarpTileYIdx) {
+#ifdef DEBUG2
+        if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+            (threadIdx.y == 0)) {
+          printf("kvWarpTileYIdx=%d: kvWarpTileYEnd: %d, kvWarpTileXEnd: %d\n",
+                 kvWarpTileYIdx, kvWarpTileYEnd, kvWarpTileXEnd);
+        }
+#endif
+        for (uint kvWarpTileXIdx = 0; kvWarpTileXIdx < kvWarpTileXEnd;
+             ++kvWarpTileXIdx) {
+          //? kvWarpTileIdxes for k-tile AND v-tile
+          //* shared memory:
+          const uint kvWarpTileThreadSharedMemYIdx =
+              blockDim.y * kvWarpTileYIdx + threadIdx.y;
+          const uint kvWarpTileThreadSharedMemXIdx =
+              blockDim.x * kvWarpTileXIdx + threadIdx.x;
+          //* global memory:
+          // left upper corner of kTileBlock in K (global memory)
+          const uint kvWarpTileBlockGlobalMemIdx =
+              kvTileBlockGlobalMemIdx +
+              (dimHeads * blockDim.y) * kvWarpTileYIdx +
+              blockDim.x * kvWarpTileXIdx;
+          const uint kvWarpTileThreadGlobalMemIdx =
+              kvWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
+              threadIdx.x;
+          // just kept for reference:
+          // //! while loading k: k = k / sqrt(dimHeads)
+          // SMEMARRAY(kTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
+          //           kvWarpTileThreadSharedMemXIdx) =
+          //     mul_g(matK[kvWarpTileThreadGlobalMemIdx],
+          //           float2type<scalar_t>(rsqrtf(type2float((dimHeads)))));
+          //! For simplicity: assume that KVtileDim is a multiple of blockDim.y
+          //! and dimHeads is a multiple of blockDim.x
+          SMEMARRAY(kTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
+                    kvWarpTileThreadSharedMemXIdx) =
+              matK[kvWarpTileThreadGlobalMemIdx];
+          SMEMARRAY(vTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
+                    kvWarpTileThreadSharedMemXIdx) =
+              matV[kvWarpTileThreadGlobalMemIdx];
+        }
+      }
+      __syncthreads();
 
       // looplevel 2 (i-loop): loop over QTile blocks along seqLen dim
       const uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
       uint jIdx = blockIdx.y + kvTileIdx * gridDim.y;
       uint qTileStart = FLOOR_DIV(jIdx * KVtileDim, QtileDim);
       for (uint qTileIdx = qTileStart; qTileIdx < qTileEnd; ++qTileIdx) {
+
+        //* qTile Global Memory Index
+        const uint qdHTileBlockGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxQKVdH + (dimHeads * QtileDim) * qTileIdx;
+
+        //* nChunk, mChunk Global Memory Index
+        const uint nmChunkBlockGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxIFNMgate + (1 * QtileDim) * qTileIdx;
+
+        //* sTile Global Memory Index
+        const uint sTileYdimGridYIdx = QtileDim * qTileIdx;
+        const uint sTileYdimBlockYIdx = sTileYdimGridYIdx;
+
         //! Load nChunk & mChunk in SRAM
-        // TODO
+        const uint nmChunkEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+        for (uint nmChunkIdx = 0; nmChunkIdx < nmChunkEnd; ++nmChunkIdx) {
+          //? nm idxes
+          //* shared memory
+          const uint nmThreadSharedMemIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * nmChunkIdx;
+          //* global memory
+          const uint nmThreadGlobalMemIdx =
+              nmChunkBlockGlobalMemIdx + flatThreadIdx;
+
+          if (nmThreadSharedMemIdx < QtileDim) {
+            SMEMVECTOR(nChunk, nmThreadSharedMemIdx) =
+                vecN[nmThreadGlobalMemIdx];
+            SMEMVECTOR(mChunk, nmThreadSharedMemIdx) =
+                vecM[nmThreadGlobalMemIdx];
+          }
+        }
+
         //! Load qTile & deltaHTile in SRAM
-        // TODO
+        // loops over rows (outer) and columns (inner) of qTile and deltaHTile
+        const uint qdHWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y); // rows
+        const uint qdHWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x); // cols
+        for (uint qdHWarpTileYIdx = 0; qdHWarpTileYIdx < qdHWarpTileYEnd;
+             ++qdHWarpTileYIdx) {
+          for (uint qdHWarpTileXIdx = 0; qdHWarpTileXIdx < qdHWarpTileXEnd;
+               ++qdHWarpTileXIdx) {
+            //? qdHWarpTileIdxes for q-tile AND delta-h-tile
+            //* shared memory:
+            const uint qdHWarpTileThreadSharedMemYIdx =
+                blockDim.y * qdHWarpTileYIdx + threadIdx.y;
+            const uint qdHWarpTileThreadSharedMemXIdx =
+                blockDim.x * qdHWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            // left upper corner of qTileBlock in Q (global memory)
+            const uint qdHWarpTileBlockGlobalMemIdx =
+                qdHTileBlockGlobalMemIdx +
+                (dimHeads * blockDim.y) * qdHWarpTileYIdx +
+                blockDim.x * qdHWarpTileXIdx;
+            const uint qdHWarpTileThreadGlobalMemIdx =
+                qdHWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
+                threadIdx.x;
+            SMEMARRAY(qTile, dimHeads, qdHWarpTileThreadSharedMemYIdx,
+                      qdHWarpTileThreadSharedMemXIdx) =
+                matQ[qdHWarpTileThreadGlobalMemIdx];
+            SMEMARRAY(deltaHTile, dimHeads, qdHWarpTileThreadSharedMemYIdx,
+                      qdHWarpTileThreadSharedMemXIdx) =
+                deltaH[qdHWarpTileThreadGlobalMemIdx];
+          }
+        }
 
         //! Compute deltaCTile = deltaHtile  vTile^T (and divide by nChunk)
         // TODO
