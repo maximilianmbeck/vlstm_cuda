@@ -1,7 +1,6 @@
 // Copyright JKU Linz 2024
 // Author: Maximilian Beck
 
-#include <__clang_cuda_builtin_vars.h>
 #include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda.h>
@@ -456,7 +455,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                                            sWarpTileThreadSharedMemXIdx, i))));
             }
             // compute sTile
-            scalar_t s_val = float2type<scalar_t>(acc);
+            scalar_t s_val =
+                float2type<scalar_t>(mul_g(acc, rsqrtf(type2float(dimHeads))));
             SMEMARRAY(sTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
                       sWarpTileThreadSharedMemXIdx) = s_val;
             // compute dDTile
