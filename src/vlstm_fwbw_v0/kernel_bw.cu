@@ -236,34 +236,30 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       const uint sTileXdimBlockYIdx =
           sTileXdimGridYIdx + KVtileDim * blockIdx.y;
 
-      const uint ifChunkGridXYGlobalMemIdx =
+      const uint iChunkGridXYGlobalMemIdx =
           batchHeadGridXGlobalMemIdxIFNMgate +
           (1 * KVtileDim * gridDim.y) * kvTileIdx;
-      const uint ifChunkBlockGlobalMemIdx =
-          ifChunkGridXYGlobalMemIdx + (1 * KVtileDim) * blockIdx.y;
+      const uint iChunkBlockGlobalMemIdx =
+          iChunkGridXYGlobalMemIdx + (1 * KVtileDim) * blockIdx.y;
 
-      //! Load iChunk & fChunk, Init deltaIChunk & deltaFChunk to zero in SRAM
-      const uint ifChunkEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
-      for (uint ifChunkIdx = 0; ifChunkIdx < ifChunkEnd; ++ifChunkIdx) {
-        //? if idxes
+      //! Load iChunk, Init deltaIChunk & deltaFChunk to zero in SRAM
+      const uint idFdIChunkEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
+      for (uint idFdIChunkIdx = 0; idFdIChunkIdx < idFdIChunkEnd;
+           ++idFdIChunkIdx) {
+        //? idFdI idxes
         //* shared memory
-        const uint ifThreadSharedMemIdx =
-            flatThreadIdx + blockDim.x * blockDim.y * ifChunkIdx;
+        const uint idFdIThreadSharedMemIdx =
+            flatThreadIdx + blockDim.x * blockDim.y * idFdIChunkIdx;
         //* global memory
-        const uint ifThreadGlobalMemIdx =
-            ifChunkBlockGlobalMemIdx + flatThreadIdx;
+        const uint iThreadGlobalMemIdx =
+            iChunkBlockGlobalMemIdx + flatThreadIdx;
 
-        if (ifThreadSharedMemIdx < KVtileDim) {
-          SMEMVECTOR(iChunk, ifThreadSharedMemIdx) =
-              iGatePreact[ifThreadGlobalMemIdx];
-          SMEMVECTOR(fChunk, ifThreadSharedMemIdx) =
-              logsigmoid_g(fGatePreact[ifThreadGlobalMemIdx]);
-          // without logsigmoid for debugging only:
-          //   SMEMVECTOR(fChunk, ifThreadSharedMemIdx) =
-          //       fGatePreact[ifThreadGlobalMemIdx];
-          SMEMVECTOR(deltaIChunk, ifThreadSharedMemIdx) =
+        if (idFdIThreadSharedMemIdx < KVtileDim) {
+          SMEMVECTOR(iChunk, idFdIThreadSharedMemIdx) =
+              iGatePreact[iThreadGlobalMemIdx];
+          SMEMVECTOR(deltaIChunk, idFdIThreadSharedMemIdx) =
               dscalar_zero<scalar_t>();
-          SMEMVECTOR(deltaFChunk, ifThreadSharedMemIdx) =
+          SMEMVECTOR(deltaFChunk, idFdIThreadSharedMemIdx) =
               dscalar_zero<scalar_t>();
         }
       }
@@ -327,30 +323,35 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         const uint qdHTileBlockGlobalMemIdx =
             batchHeadGridXGlobalMemIdxQKVdH + (dimHeads * QtileDim) * qTileIdx;
 
-        //* nChunk, mChunk Global Memory Index
-        const uint nmChunkBlockGlobalMemIdx =
+        //* nChunk, mChunk, fChunk Global Memory Index
+        const uint nmfChunkBlockGlobalMemIdx =
             batchHeadGridXGlobalMemIdxIFNMgate + (1 * QtileDim) * qTileIdx;
 
         //* sTile Global Memory Index
         const uint sTileYdimGridYIdx = QtileDim * qTileIdx;
         const uint sTileYdimBlockYIdx = sTileYdimGridYIdx;
 
-        //! Load nChunk & mChunk in SRAM
-        const uint nmChunkEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
-        for (uint nmChunkIdx = 0; nmChunkIdx < nmChunkEnd; ++nmChunkIdx) {
-          //? nm idxes
+        //! Load nChunk, mChunk, fChunk in SRAM
+        const uint nmfChunkEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+        for (uint nmfChunkIdx = 0; nmfChunkIdx < nmfChunkEnd; ++nmfChunkIdx) {
+          //? nmf idxes
           //* shared memory
-          const uint nmThreadSharedMemIdx =
-              flatThreadIdx + blockDim.x * blockDim.y * nmChunkIdx;
+          const uint nmfThreadSharedMemIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * nmfChunkIdx;
           //* global memory
-          const uint nmThreadGlobalMemIdx =
-              nmChunkBlockGlobalMemIdx + flatThreadIdx;
+          const uint nmfThreadGlobalMemIdx =
+              nmfChunkBlockGlobalMemIdx + flatThreadIdx;
 
-          if (nmThreadSharedMemIdx < QtileDim) {
-            SMEMVECTOR(nChunk, nmThreadSharedMemIdx) =
-                vecN[nmThreadGlobalMemIdx];
-            SMEMVECTOR(mChunk, nmThreadSharedMemIdx) =
-                vecM[nmThreadGlobalMemIdx];
+          if (nmfThreadSharedMemIdx < QtileDim) {
+            SMEMVECTOR(nChunk, nmfThreadSharedMemIdx) =
+                vecN[nmfThreadGlobalMemIdx];
+            SMEMVECTOR(mChunk, nmfThreadSharedMemIdx) =
+                vecM[nmfThreadGlobalMemIdx];
+            SMEMVECTOR(fChunk, nmfThreadSharedMemIdx) =
+                logsigmoid_g(fGatePreact[nmfThreadGlobalMemIdx]);
+            // without logsigmoid for debugging only:
+            //   SMEMVECTOR(fChunk, nmfThreadSharedMemIdx) =
+            //       fGatePreact[nmfThreadGlobalMemIdx];
           }
         }
 
@@ -523,7 +524,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               flatThreadIdx + blockDim.x * blockDim.y * ifChunkIdx;
           //* global memory
           const uint ifThreadGlobalMemIdx =
-              ifChunkBlockGlobalMemIdx + flatThreadIdx;
+              iChunkBlockGlobalMemIdx + flatThreadIdx;
 
           if (ifThreadSharedMemIdx < KVtileDim) {
             // sum up f gate values in i-direction
