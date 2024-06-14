@@ -544,8 +544,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #endif
         //! iChunk&fChunk Loading (only once per kvTileIdx in KVtileDim)
         //* (grid&block) offset in i&f preactivations for i and f chunk
-        //(global
-        // memory)
         // every thread block loads the same i&f preactivations
         const uint ifChunkBlockXYGlobalMemIdx =
             batchHeadGridXGlobalMemIdxIFgateNMchunk +

@@ -155,7 +155,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   scalar_t *fChunk = (scalar_t *)&iChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
   // deltaIChunk (KVtileDim x 1)
   scalar_t *deltaIChunk =
-      (scalar_t *)&fChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
+      (scalar_t *)&fChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
   // deltaFChunk (KVtileDim x 1)
   scalar_t *deltaFChunk =
       (scalar_t *)&deltaIChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
@@ -473,7 +473,72 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! Compute dDtile = deltaCTile * sTile
         // Done with the pointwise multiplication in the previous step
 
-        //! DEBUG: write dDtile to global memory
+        // //! DEBUG: write dDtile to global memory
+        // // left upper corner of cWarpTileBlock in C (global memory)
+        // //* cdTile Global Memory Index (Debug only)
+        // const uint cdTileGridXYGlobalMemIdx =
+        //     batchHeadGridXGlobalMemIdxCD + (seqLen * QtileDim) * qTileIdx;
+        // const uint cdTileBlockGlobalMemIdx =
+        //     cdTileGridXYGlobalMemIdx + (kvTileIdx * KVtileDim * gridDim.y) +
+        //     (1 * KVtileDim) * blockIdx.y;
+
+        // const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        // const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        // for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+        //      ++cdWarpTileYIdx) {
+        //   for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+        //        ++cdWarpTileXIdx) {
+        //     //? cTileIdxes
+        //     //* shared memory:
+        //     const uint cdWarpTileThreadSharedMemYIdx =
+        //         blockDim.y * cdWarpTileYIdx + threadIdx.y;
+        //     const uint cdWarpTileThreadSharedMemXIdx =
+        //         blockDim.x * cdWarpTileXIdx + threadIdx.x;
+        //     //* global memory:
+        //     const uint cdWarpTileBlockGlobalMemIdx =
+        //         cdTileBlockGlobalMemIdx +
+        //         (seqLen * blockDim.y) * cdWarpTileYIdx +
+        //         blockDim.x * cdWarpTileXIdx;
+        //     const uint cdWarpTileThreadGlobalMemIdx =
+        //         cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
+        //         threadIdx.x;
+
+        //     matC[cdWarpTileThreadGlobalMemIdx] =
+        //         SMEMARRAY(dddTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+        //                   cdWarpTileThreadSharedMemXIdx);
+        //   }
+        // }
+
+        //! Construct D'Tile from fChunk and iChunk and
+        //! compute deltaDtildeTile = deltaDTile * D'Tile
+        // flatten all threads to 1D along kvTileDim (j-direction),
+        // sum up the f gate values in i-direction (qTileDim),
+        // store the last row of the D'Tile in fRowChunk
+        // take care of causality
+        const uint ifChunkEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
+        for (uint ifChunkIdx = 0; ifChunkIdx < ifChunkEnd; ++ifChunkIdx) {
+          //? if idxes
+          //* shared memory
+          const uint ifThreadSharedMemIdx =
+              flatThreadIdx + blockDim.x * blockDim.y * ifChunkIdx;
+          //* global memory
+          const uint ifThreadGlobalMemIdx =
+              ifChunkBlockGlobalMemIdx + flatThreadIdx;
+
+          if (ifThreadSharedMemIdx < KVtileDim) {
+            // sum up f gate values in i-direction
+            float f_acc = 0.0f;
+            for (uint i = 0; i < QtileDim; ++i) {
+              f_acc = add_g(f_acc, type2float(SMEMVECTOR(fChunk, i)));
+            }
+            // store the last row of D'Tile in fRowChunk
+            if (ifThreadSharedMemIdx == KVtileDim - 1) {
+              SMEMVECTOR(fRowChunk, ifThreadSharedMemIdx) = f_acc;
+            }
+          }
+        }
+
+        //! DEBUG: write D'tile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
         //* cdTile Global Memory Index (Debug only)
         const uint cdTileGridXYGlobalMemIdx =
@@ -506,27 +571,13 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             matC[cdWarpTileThreadGlobalMemIdx] =
                 SMEMARRAY(dddTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
                           cdWarpTileThreadSharedMemXIdx);
-#ifdef DEBUG10
-            if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
-                (threadIdx.x == 0 && threadIdx.y == 0)) {
-              printf("qTileIdx=%d, kvTileIdx=%d, cTileBlockXIdx=%d, "
-                     "cTileBlockYIdx=%d, dTileThreadXYIdx=(%d,%d), "
-                     "d_val=%f\n",
-                     qTileIdx, kvTileIdx, cTileBlockXIdx, cTileBlockYIdx,
-                     cdWarpTileThreadSharedMemXIdx,
-                     cdWarpTileThreadSharedMemYIdx,
-                     type2float(SMEMARRAY(dTile, KVtileDim,
-                                          cdWarpTileThreadSharedMemYIdx,
-                                          cdWarpTileThreadSharedMemXIdx)));
-            }
-#endif
           }
         }
 
-        //! sum up deltaIChunk & deltaFChunk and update in SRAM
-        // TODO
+        //! Compute deltaDtildeTile = deltaDTile * D'Tile
+        // Computed with pointwise multiplication in the previous step
 
-        //! Construct D'Tile from fChunk and iChunk
+        //! sum up deltaIChunk & deltaFChunk and update in SRAM
         // TODO
 
         //! Compute pTile = deltaCTile * D'Tile
@@ -604,10 +655,10 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   // to access the same input and forget gate values at the same time for the
   // gate matrix computation
   // TODO check if this is really helping!
-  const uint ifdidfChunkSharedMemSize =
+  const uint ididfChunkSharedMemSize =
       sizeof(scalar_t) * KVtileDim * (1 + SHARED_MEM_PADDING);
 
-  const uint nmChunkSharedMemSize =
+  const uint nmfChunkSharedMemSize =
       sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
 
   //? intermediate tiles
@@ -620,7 +671,7 @@ void kernel_dispatchers::vlstm_bw_dispatch(
 
   const uint sharedMemorySize =
       3 * qdQdHTileSharedMemSize + 4 * kvdKdVTileSharedMemSize +
-      4 * ifdidfChunkSharedMemSize + 2 * nmChunkSharedMemSize +
+      3 * ididfChunkSharedMemSize + 3 * nmfChunkSharedMemSize +
       3 * sdprdcddTileSharedMemSize + 1 * fTileRowSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
