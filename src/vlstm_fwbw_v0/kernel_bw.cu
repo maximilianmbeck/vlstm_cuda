@@ -1,7 +1,6 @@
 // Copyright JKU Linz 2024
 // Author: Maximilian Beck
 
-#include <__clang_cuda_builtin_vars.h>
 #include <cooperative_groups.h>
 #include <cstdio>
 #include <cuda.h>
