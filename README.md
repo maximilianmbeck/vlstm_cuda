@@ -45,7 +45,9 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
 Notes: 
 
 - When compiling CUDA samples ensure correct C++ standard and linking:
-```make NVCCFLAGS="-std=c++11" LDFLAGS="-lstdc++" VERBOSE=1```
+```
+make NVCCFLAGS="-std=c++11" LDFLAGS="-lstdc++" VERBOSE=1
+```
 - Also possible:
 ``` 
 # Set the HOST_COMPILER explicitly

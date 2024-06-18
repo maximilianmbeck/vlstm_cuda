@@ -515,7 +515,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
 #endif
-        // TODO reorganize this part: construct D'Tile at the very first place
         //! Construct D'Tile from fChunk and iChunk and
         //! compute deltaDtildeTile = deltaDTile * D'Tile
         // flatten all threads to 1D along kvTileDim (j-direction),
@@ -646,6 +645,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         // TODO
 
         //! Compute pTile = deltaCTile * D'Tile
+        //! Compute rTile = sTile * D'Tile
+        // TODO
         // TODO
 
         //! Compute deltaQTile = pTile  (kTile/sqrt(d))
@@ -655,9 +656,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         // TODO check how to do this
 
         //! Compute deltaKTile = pTile^T  (qTile/sqrt(d)) and update in SRAM
-        // TODO
-
-        //! Compute rTile = sTile * D'Tile
         // TODO
 
         //! Compute deltaVTile = rTile^T  deltaHTile and update in SRAM
