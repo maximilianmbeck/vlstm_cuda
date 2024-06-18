@@ -679,7 +679,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
 #endif
 
-        //! Compute csDTile = cumsum(D'Tile) (store in dCDcsRTile)
+        //! Compute csDTile = cumsum(deltaDtildeTile) (store in dCDcsRTile)
         // cumsum along the j-direction (kvTileDim / x-dim)
         // loop in i-direction (qTileDim / y-dim)
         const uint csDTileYdimEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
@@ -708,9 +708,9 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                   sTileXdimBlockYIdx + csDTileXdimThreadSharedMemIdx;
               scalar_t dcs_val = dscalar_zero<scalar_t>();
               if (csDTileYdimThreadIdx < csDTileXdimThreadIdx) {
-                scalar_t d_val = SMEMARRAY(dstrTile, KVtileDim,
-                                           csDTileYdimThreadSharedMemIdx,
-                                           csDTileXdimThreadSharedMemIdx);
+                scalar_t d_val =
+                    SMEMARRAY(dDPTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
+                              csDTileXdimThreadSharedMemIdx);
                 acc = add_g(acc, type2float(d_val));
               }
               SMEMARRAY(dCDcsRTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
