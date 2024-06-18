@@ -162,9 +162,11 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
   //? intermediate tiles
   //* (QtileDim x KVtileDim) tiles:
-  // sTile (QtileDim x KVtileDim)
-  scalar_t *sTile =
+  // dstrTile (QtileDim x KVtileDim)
+  scalar_t *dstrTile =
       (scalar_t *)&deltaFChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
+  // sTile (QtileDim x KVtileDim)
+  scalar_t *sTile = (scalar_t *)&dstrTile[KVtileDim * (1 + SHARED_MEM_PADDING)];
   // dDPTile (QtileDim x KVtileDim)
   scalar_t *dDPTile =
       (scalar_t *)&sTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
@@ -588,8 +590,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                   d_val = exp_g(sub_g(dtilde_val, m_val));
                 }
               }
-              // store the D'Tile entries in dCRTile // TODO new tile here
-              SMEMARRAY(dCRTile, KVtileDim, dTileYdimThreadSharedMemIdx,
+              // store the D'Tile entries in dstrTile
+              SMEMARRAY(dstrTile, KVtileDim, dTileYdimThreadSharedMemIdx,
                         dTileXdimThreadSharedMemIdx) = d_val;
               // store the deltaDtildeTile entries in dDPTile
               SMEMARRAY(dDPTile, KVtileDim, dTileYdimThreadSharedMemIdx,
@@ -632,7 +634,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 threadIdx.x;
 
             matC[cdWarpTileThreadGlobalMemIdx] =
-                SMEMARRAY(dCRTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                SMEMARRAY(dstrTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
                           cdWarpTileThreadSharedMemXIdx);
           }
         }
