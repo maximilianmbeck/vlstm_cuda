@@ -745,10 +745,12 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             for (uint csDtileYdimThreadSharedMemIdx = 0;
                  csDtileYdimThreadSharedMemIdx < QtileDim;
                  ++csDtileYdimThreadSharedMemIdx) {
+
               //* dTile global index (y-dim / QtileDim) (virtual, as never
               // materialized fully)
               const uint dTileYdimThreadIdx =
                   sTileYdimBlockYIdx + csDtileYdimThreadSharedMemIdx;
+
               // sum up deltaIChunk
               if (dTileYdimThreadIdx <= dTileXdimThreadIdx) {
                 //? sum the entries in deltaDtildeTile
@@ -767,21 +769,21 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 acc_deltaF = add_g(acc_deltaF, type2float(deltaF_val));
               }
 
-              // update deltaIChunk & deltaFChunk in SMEM
-              scalar_t deltaI_val =
-                  SMEMVECTOR(deltaIChunk, dIdFChunkXdimThreadSharedMemIdx);
-              SMEMVECTOR(deltaIChunk, dIdFChunkXdimThreadSharedMemIdx) =
-                  float2type<scalar_t>(
-                      add_g(type2float(deltaI_val), acc_deltaI));
+            } // end for (csDtileYdimThreadSharedMemIdx)
 
-              scalar_t deltaFbar_val =
-                  SMEMVECTOR(deltaFChunk, dIdFChunkXdimThreadSharedMemIdx);
-              SMEMVECTOR(deltaFChunk, dIdFChunkXdimThreadSharedMemIdx) =
-                  float2type<scalar_t>(
-                      add_g(type2float(deltaFbar_val), acc_deltaF));
-            } // end for (dTileYdimThreadSharedMemIdx)
-          }   // end if (dIdFChunkXdimThreadSharedMemIdx < KVtileDim)
-        }     // end for (dIdFChunkXdimThreadSharedMemIdx)
+            // update deltaIChunk & deltaFChunk in SMEM
+            scalar_t deltaI_val =
+                SMEMVECTOR(deltaIChunk, dIdFChunkXdimThreadSharedMemIdx);
+            SMEMVECTOR(deltaIChunk, dIdFChunkXdimThreadSharedMemIdx) =
+                float2type<scalar_t>(add_g(type2float(deltaI_val), acc_deltaI));
+
+            scalar_t deltaFbar_val =
+                SMEMVECTOR(deltaFChunk, dIdFChunkXdimThreadSharedMemIdx);
+            SMEMVECTOR(deltaFChunk, dIdFChunkXdimThreadSharedMemIdx) =
+                float2type<scalar_t>(
+                    add_g(type2float(deltaFbar_val), acc_deltaF));
+          } // end if (dIdFChunkXdimThreadSharedMemIdx < KVtileDim)
+        }   // end for (csDtileXdimThreadSharedMemIdx)
 
         //! Compute pTile = deltaCTile * D'Tile
         //! Compute rTile = sTile * D'Tile
