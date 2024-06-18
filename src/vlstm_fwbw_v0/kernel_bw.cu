@@ -641,11 +641,109 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! Compute deltaDtildeTile = deltaDTile * D'Tile
         // Computed with pointwise multiplication in the previous step
 
-        //! Compute csDTile = cumsum(D'Tile)
-        // TODO
+        //! Compute csDTile = cumsum(D'Tile) (store in dCDcsRTile)
+        // cumsum along the j-direction (kvTileDim / x-dim)
+        // loop in i-direction (qTileDim / y-dim)
+        const uint csDTileYdimEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+        for (uint csDtileYdimThreadSharedMemIdx = 0;
+             csDtileYdimThreadSharedMemIdx < csDTileYdimEnd;
+             ++csDtileYdimThreadSharedMemIdx) {
+          //? csDTile idxes
+          //* shared memory
+          const uint csDTileYdimThreadSharedMemIdx =
+              flatThreadIdx +
+              blockDim.x * blockDim.y * csDtileYdimThreadSharedMemIdx;
+
+          //* csDTile global index (y-dim / QtileDim) (virtual, as never
+          // materialized fully)
+          const uint csDTileYdimThreadIdx =
+              sTileYdimBlockYIdx + csDTileYdimThreadSharedMemIdx;
+
+          if (csDTileYdimThreadSharedMemIdx < QtileDim) {
+            float acc = 0.0f;
+            for (uint csDTileXdimThreadSharedMemIdx = 0;
+                 csDTileXdimThreadSharedMemIdx < KVtileDim;
+                 ++csDTileXdimThreadSharedMemIdx) {
+              //* csDtile global index (x-dim / KVtiledim) (virtual, as never
+              // materialized fully)
+              const uint csDTileXdimThreadIdx =
+                  sTileXdimBlockYIdx + csDTileXdimThreadSharedMemIdx;
+              scalar_t dcs_val = dscalar_zero<scalar_t>();
+              if (csDTileYdimThreadIdx < csDTileXdimThreadIdx) {
+                scalar_t d_val = SMEMARRAY(dstrTile, KVtileDim,
+                                           csDTileYdimThreadSharedMemIdx,
+                                           csDTileXdimThreadSharedMemIdx);
+                acc = add_g(acc, type2float(d_val));
+              }
+              SMEMARRAY(dCDcsRTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
+                        csDTileXdimThreadSharedMemIdx) = dcs_val;
+            }
+          }
+        }
+        __syncthreads();
 
         //! sum up deltaIChunk & deltaFChunk and update in SRAM
-        // TODO
+        // sum along i-direction (qTileDim / y-dim)
+        // loop in j-direction (kvTileDim / x-dim)
+        const uint csDtileXdimXdimEnd =
+            CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
+        for (uint csDtileXdimThreadSharedMemIdx = 0;
+             csDtileXdimThreadSharedMemIdx < csDtileXdimXdimEnd;
+             ++csDtileXdimThreadSharedMemIdx) {
+          //? dIdFChunk idxes
+          //* shared memory
+          const uint dIdFChunkXdimThreadSharedMemIdx =
+              flatThreadIdx +
+              blockDim.x * blockDim.y * csDtileXdimThreadSharedMemIdx;
+
+          //* dTile global index (x-dim / kvTileDim) (virtual, as never
+          // materialized fully)
+          const uint dTileXdimThreadIdx =
+              sTileXdimBlockYIdx + dIdFChunkXdimThreadSharedMemIdx;
+
+          if (dIdFChunkXdimThreadSharedMemIdx < KVtileDim) {
+            float acc_deltaI = 0.0f;
+            float acc_deltaF = 0.0f;
+            for (uint csDtileYdimThreadSharedMemIdx = 0;
+                 csDtileYdimThreadSharedMemIdx < QtileDim;
+                 ++csDtileYdimThreadSharedMemIdx) {
+              //* dTile global index (y-dim / QtileDim) (virtual, as never
+              // materialized fully)
+              const uint dTileYdimThreadIdx =
+                  sTileYdimBlockYIdx + csDtileYdimThreadSharedMemIdx;
+              // sum up deltaIChunk
+              if (dTileYdimThreadIdx <= dTileXdimThreadIdx) {
+                //? sum the entries in deltaDtildeTile
+                scalar_t deltaI_val =
+                    SMEMARRAY(dDPTile, KVtileDim, csDtileYdimThreadSharedMemIdx,
+                              dIdFChunkXdimThreadSharedMemIdx);
+                acc_deltaI = add_g(acc_deltaI, type2float(deltaI_val));
+              }
+
+              // sum up deltaFChunk
+              if (dTileYdimThreadIdx < dTileXdimThreadIdx) {
+                //? sum the entries in DcsTile
+                scalar_t deltaF_val = SMEMARRAY(
+                    dCDcsRTile, KVtileDim, csDtileYdimThreadSharedMemIdx,
+                    dIdFChunkXdimThreadSharedMemIdx);
+                acc_deltaF = add_g(acc_deltaF, type2float(deltaF_val));
+              }
+
+              // update deltaIChunk & deltaFChunk in SMEM
+              scalar_t deltaI_val =
+                  SMEMVECTOR(deltaIChunk, dIdFChunkXdimThreadSharedMemIdx);
+              SMEMVECTOR(deltaIChunk, dIdFChunkXdimThreadSharedMemIdx) =
+                  float2type<scalar_t>(
+                      add_g(type2float(deltaI_val), acc_deltaI));
+
+              scalar_t deltaFbar_val =
+                  SMEMVECTOR(deltaFChunk, dIdFChunkXdimThreadSharedMemIdx);
+              SMEMVECTOR(deltaFChunk, dIdFChunkXdimThreadSharedMemIdx) =
+                  float2type<scalar_t>(
+                      add_g(type2float(deltaFbar_val), acc_deltaF));
+            } // end for (dTileYdimThreadSharedMemIdx)
+          }   // end if (dIdFChunkXdimThreadSharedMemIdx < KVtileDim)
+        }     // end for (dIdFChunkXdimThreadSharedMemIdx)
 
         //! Compute pTile = deltaCTile * D'Tile
         //! Compute rTile = sTile * D'Tile
@@ -664,12 +762,33 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! Compute deltaVTile = rTile^T  deltaHTile and update in SRAM
         // TODO
       } // end looplevel 2 (i-loop)
-        //! Store deltaKTile & deltaVTile in HBM
-        // TODO
-        //! Store deltaIChunk & deltaFChunk in HBM
-        // TODO
-    }   // end looplevel 1 (j-loop)
-  }     // end looplevel 0
+      //! Store deltaKTile & deltaVTile in HBM
+      // TODO
+      //! Store deltaIChunk & deltaFChunk in HBM
+      // loop in j-direction (kvTileDim / x-dim)
+      const uint dIdFChunkEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
+      for (uint dIdFChunkIdx = 0; dIdFChunkIdx < dIdFChunkEnd; ++dIdFChunkIdx) {
+        //? dIdFChunk idxes
+        //* shared memory
+        const uint dIdFChunkThreadSharedMemIdx =
+            flatThreadIdx + blockDim.x * blockDim.y * dIdFChunkIdx;
+        //* global memory
+        const uint dIdFThreadGlobalMemIdx =
+            iChunkBlockGlobalMemIdx + flatThreadIdx;
+
+        if (dIdFChunkThreadSharedMemIdx < KVtileDim) {
+          deltaIGatePreact[dIdFThreadGlobalMemIdx] =
+              SMEMVECTOR(deltaIChunk, dIdFChunkThreadSharedMemIdx);
+
+          // TODO: multiply with sigmoid derivative: sigmoid(-fGatePreact)
+          deltaFGatePreact[dIdFThreadGlobalMemIdx] =
+              SMEMVECTOR(deltaFChunk, dIdFChunkThreadSharedMemIdx);
+        }
+      }
+
+    } // end looplevel 1 (j-loop)
+    //! Sync deltaFChunk computation
+  } // end looplevel 0
 } // kernels::vlstm_fw
 
 template <typename scalar_t>
