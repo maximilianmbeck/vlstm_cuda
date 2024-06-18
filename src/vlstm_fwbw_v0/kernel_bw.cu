@@ -60,7 +60,8 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
 #define DEBUG 1
 // #define OUTPUTdDTile 1
-#define OUTPUTDTile 1
+#define OUTPUTdDtildeTile 1
+// #define OUTPUTDTile 1
 // #define DEBUG4 1
 // #define DEBUG5 1
 // #define DEBUG6 1 // print fTileCol vals
@@ -569,8 +570,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               scalar_t d_val = dscalar_zero<scalar_t>();
               scalar_t deltaDtilde_val = dscalar_zero<scalar_t>();
               if (dTileYdimThreadIdx < dTileXdimThreadIdx) {
+                // (-> in upper triangular part)
                 d_val = float2type<scalar_t>(-CUDART_INF_F);
-                deltaDtilde_val = d_val;
               } else {
                 scalar_t deltaD_val =
                     SMEMARRAY(dDPTile, KVtileDim, dTileYdimThreadSharedMemIdx,
@@ -580,7 +581,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
                 if (dTileYdimThreadIdx == dTileXdimThreadIdx) {
                   d_val = exp_g(sub_g(i_val, m_val));
-                  deltaDtilde_val = mul_g(deltaD_val, d_val);
                 } else {
                   // (dTileYdimThreadIdx > dTileXdimThreadIdx)
                   // (-> in lower triangular part)
@@ -588,6 +588,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                       float2type<scalar_t>(add_g(f_acc, type2float(i_val)));
                   d_val = exp_g(sub_g(dtilde_val, m_val));
                 }
+                deltaDtilde_val = mul_g(deltaD_val, d_val);
               }
               // store the D'Tile entries in dstrTile
               SMEMARRAY(dstrTile, KVtileDim, dTileYdimThreadSharedMemIdx,
@@ -640,6 +641,43 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
         //! Compute deltaDtildeTile = deltaDTile * D'Tile
         // Computed with pointwise multiplication in the previous step
+#ifdef OUTPUTdDtildeTile
+        //! DEBUG: write D'tile to global memory
+        // left upper corner of cWarpTileBlock in C (global memory)
+        //* cdTile Global Memory Index (Debug only)
+        const uint cdTileGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxCD + (seqLen * QtileDim) * qTileIdx;
+        const uint cdTileBlockGlobalMemIdx =
+            cdTileGridXYGlobalMemIdx + (kvTileIdx * KVtileDim * gridDim.y) +
+            (1 * KVtileDim) * blockIdx.y;
+
+        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+             ++cdWarpTileYIdx) {
+          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+               ++cdWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpTileThreadSharedMemYIdx =
+                blockDim.y * cdWarpTileYIdx + threadIdx.y;
+            const uint cdWarpTileThreadSharedMemXIdx =
+                blockDim.x * cdWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            const uint cdWarpTileBlockGlobalMemIdx =
+                cdTileBlockGlobalMemIdx +
+                (seqLen * blockDim.y) * cdWarpTileYIdx +
+                blockDim.x * cdWarpTileXIdx;
+            const uint cdWarpTileThreadGlobalMemIdx =
+                cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
+                threadIdx.x;
+
+            matC[cdWarpTileThreadGlobalMemIdx] =
+                SMEMARRAY(dDPTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                          cdWarpTileThreadSharedMemXIdx);
+          }
+        }
+#endif
 
         //! Compute csDTile = cumsum(D'Tile) (store in dCDcsRTile)
         // cumsum along the j-direction (kvTileDim / x-dim)
