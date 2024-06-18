@@ -170,13 +170,13 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   // dDPTile (QtileDim x KVtileDim)
   scalar_t *dDPTile =
       (scalar_t *)&sTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
-  // dCRTile (QtileDim x KVtileDim)
-  scalar_t *dCRTile =
+  // dCDcsRTile (QtileDim x KVtileDim)
+  scalar_t *dCDcsRTile =
       (scalar_t *)&dDPTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //* (KVtileDim x 1) chunks:
   float *fRowChunk =
-      (float *)&dCRTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
+      (float *)&dCDcsRTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //? flatten the threads to 1D
   const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
@@ -424,7 +424,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
             // we first cast to scalar_t and then divide (this will also the
             // case for tensor cores)
-            SMEMARRAY(dCRTile, KVtileDim, cWarpTileThreadSharedMemYIdx,
+            SMEMARRAY(dCDcsRTile, KVtileDim, cWarpTileThreadSharedMemYIdx,
                       cWarpTileThreadSharedMemXIdx) =
                 div_g(float2type<scalar_t>(acc), nChunkVal);
           }
@@ -466,7 +466,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                       sWarpTileThreadSharedMemXIdx) = s_val;
             // compute dDTile
             scalar_t deltaC_val =
-                SMEMARRAY(dCRTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
+                SMEMARRAY(dCDcsRTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
                           sWarpTileThreadSharedMemXIdx);
             scalar_t ddd_val = mul_g(deltaC_val, s_val);
             SMEMARRAY(dDPTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
@@ -640,6 +640,9 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
         //! Compute deltaDtildeTile = deltaDTile * D'Tile
         // Computed with pointwise multiplication in the previous step
+
+        //! Compute csDTile = cumsum(D'Tile)
+        // TODO
 
         //! sum up deltaIChunk & deltaFChunk and update in SRAM
         // TODO
