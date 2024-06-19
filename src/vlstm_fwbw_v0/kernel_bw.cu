@@ -62,15 +62,10 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define OUTPUTdDTile 1
 #define OUTPUTdDtildeTile 1
 // #define OUTPUTDTile 1
-// #define DEBUG4 1
-// #define DEBUG5 1
-// #define DEBUG6 1 // print fTileCol vals
-// #define DEBUG7 1
-// #define DEBUG8 1
-// #define DEBUG9 1
-// #define DEBUG10 1
-// #define DEBUG11 1
-// #define DEBUG12 1
+// #define DEBUG_WRdeltaI 1
+// #define DEBUG_deltaISUM0 1
+// #define DEBUG_deltaISUM1 1
+// #define DEBUG_deltaISUM2 1
 
 /**
 Conventions:
@@ -750,18 +745,43 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               // materialized fully)
               const uint dTileYdimThreadIdx =
                   sTileYdimBlockYIdx + csDtileYdimThreadSharedMemIdx;
-
+#ifdef DEBUG_deltaISUM0
+              if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                  (flatThreadIdx < 1)) {
+                printf("!qTileIdx=%d, kvTileIdx=%d, dTileXdimThreadIdx=%d, "
+                       "dIdFChunkXdimTSMIdx=%d, flatTidx=%d, "
+                       "tbIdxXY=(%d,%d): csDtileIdx=%d, dTileXdimTIdx=%d, "
+                       "dTileYdimTIdx=%d\n",
+                       qTileIdx, kvTileIdx, dTileXdimThreadIdx,
+                       dIdFChunkXdimThreadSharedMemIdx, flatThreadIdx,
+                       threadIdx.x, threadIdx.y, csDtileYdimThreadSharedMemIdx,
+                       dTileXdimThreadIdx, dTileYdimThreadIdx);
+              }
+#endif
               // sum up deltaIChunk
-              if (dTileYdimThreadIdx <= dTileXdimThreadIdx) {
+              if (dTileYdimThreadIdx >= dTileXdimThreadIdx) {
                 //? sum the entries in deltaDtildeTile
                 scalar_t deltaI_val =
                     SMEMARRAY(dDPTile, KVtileDim, csDtileYdimThreadSharedMemIdx,
                               dIdFChunkXdimThreadSharedMemIdx);
                 acc_deltaI = add_g(acc_deltaI, type2float(deltaI_val));
+#ifdef DEBUG_deltaISUM1
+                if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                    (flatThreadIdx < 1)) {
+                  printf("qTileIdx=%d, kvTileIdx=%d, dTileXdimThreadIdx=%d, "
+                         "dIdFChunkXdimTSMIdx=%d, flatTidx=%d, "
+                         "tbIdxXY=(%d,%d), csDtileIdx=%d: "
+                         "acc_deltaI=%f\n",
+                         qTileIdx, kvTileIdx, dTileXdimThreadIdx,
+                         dIdFChunkXdimThreadSharedMemIdx, flatThreadIdx,
+                         threadIdx.x, threadIdx.y,
+                         csDtileYdimThreadSharedMemIdx, type2float(deltaI_val));
+                }
+#endif
               }
 
               // sum up deltaFChunk
-              if (dTileYdimThreadIdx < dTileXdimThreadIdx) {
+              if (dTileYdimThreadIdx > dTileXdimThreadIdx) {
                 //? sum the entries in DcsTile
                 scalar_t deltaF_val = SMEMARRAY(
                     dCDcsRTile, KVtileDim, csDtileYdimThreadSharedMemIdx,
@@ -770,6 +790,18 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               }
 
             } // end for (csDtileYdimThreadSharedMemIdx)
+
+#ifdef DEBUG_deltaISUM2
+            if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx < 1)) {
+              printf("qTileIdx=%d, kvTileIdx=%d, dTileXdimThreadIdx=%d, "
+                     "dIdFChunkXdimThreadSharedMemIdx=%d, flatTidx=%d, "
+                     "tbIdxXY=(%d,%d): "
+                     "acc_deltaI=%f\n",
+                     qTileIdx, kvTileIdx, dTileXdimThreadIdx,
+                     dIdFChunkXdimThreadSharedMemIdx, flatThreadIdx,
+                     threadIdx.x, threadIdx.y, acc_deltaI);
+            }
+#endif
 
             // update deltaIChunk & deltaFChunk in SMEM
             scalar_t deltaI_val =
@@ -823,6 +855,18 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           // TODO: multiply with sigmoid derivative: sigmoid(-fGatePreact)
           deltaFGatePreact[dIdFThreadGlobalMemIdx] =
               SMEMVECTOR(deltaFChunk, dIdFChunkThreadSharedMemIdx);
+#ifdef DEBUG_WRdeltaI
+          if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx <= 8)) {
+            printf("kvTileIdx=%d, dIdFChunkIdx=%d"
+                   "iChunkBlockGlobalMemIdx=%d, flatTidx=%d, tbIdxXY=(%d,%d): "
+                   "deltaI[%d]=%f\n",
+                   kvTileIdx, dIdFChunkIdx, iChunkBlockGlobalMemIdx,
+                   flatThreadIdx, threadIdx.x, threadIdx.y,
+                   dIdFThreadGlobalMemIdx,
+                   type2float(
+                       SMEMVECTOR(deltaIChunk, dIdFChunkThreadSharedMemIdx)));
+          }
+#endif
         }
       }
 
