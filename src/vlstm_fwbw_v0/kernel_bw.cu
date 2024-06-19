@@ -61,8 +61,8 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #define DEBUG 1
 // #define OUTPUTdDTile 1
 // #define OUTPUTdDtildeTile 1
-// #define OUTPUTDTile 1
-#define OUTPUTDcsTile 1
+#define OUTPUTDTile 1
+// #define OUTPUTDcsTile 1
 // #define DEBUG_WRdeltaI 1
 // #define DEBUG_deltaISUM0 1
 // #define DEBUG_deltaISUM1 1
@@ -317,8 +317,15 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       // looplevel 2 (i-loop): loop over QTile blocks along seqLen dim
       const uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
       uint jIdx = blockIdx.y + kvTileIdx * gridDim.y;
-      uint qTileStart = FLOOR_DIV(jIdx * KVtileDim, QtileDim);
+      //   const uint qTileStart = FLOOR_DIV(jIdx * KVtileDim, QtileDim);
+      //? We start from the first QTile such that we can sync the threadblocks
+      //? globally, and ensure that they are in sync for the next KVtile
+      //? they need to be in sync for cumsum(deltaDtildeTile) and qTile
+      const uint qTileStart = 0;
       for (uint qTileIdx = qTileStart; qTileIdx < qTileEnd; ++qTileIdx) {
+
+        //? Global Sync
+        gridGroup.sync();
 
         //* qTile Global Memory Index
         const uint qdHTileBlockGlobalMemIdx =
