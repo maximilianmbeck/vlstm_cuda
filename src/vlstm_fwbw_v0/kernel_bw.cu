@@ -60,12 +60,14 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
 #define DEBUG 1
 // #define OUTPUTdDTile 1
-#define OUTPUTdDtildeTile 1
+// #define OUTPUTdDtildeTile 1
 // #define OUTPUTDTile 1
+#define OUTPUTDcsTile 1
 // #define DEBUG_WRdeltaI 1
 // #define DEBUG_deltaISUM0 1
 // #define DEBUG_deltaISUM1 1
 // #define DEBUG_deltaISUM2 1
+#define DEBUG_deltaFCSUM0 1
 
 /**
 Conventions:
@@ -637,7 +639,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! Compute deltaDtildeTile = deltaDTile * D'Tile
         // Computed with pointwise multiplication in the previous step
 #ifdef OUTPUTdDtildeTile
-        //! DEBUG: write D'tile to global memory
+        //! DEBUG: write Dtilde Tile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
         //* cdTile Global Memory Index (Debug only)
         const uint cdTileGridXYGlobalMemIdx =
@@ -702,11 +704,12 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               const uint csDTileXdimThreadIdx =
                   sTileXdimBlockYIdx + csDTileXdimThreadSharedMemIdx;
               scalar_t dcs_val = dscalar_zero<scalar_t>();
-              if (csDTileYdimThreadIdx < csDTileXdimThreadIdx) {
+              if (csDTileYdimThreadIdx > csDTileXdimThreadIdx) {
                 scalar_t d_val =
                     SMEMARRAY(dDPTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
                               csDTileXdimThreadSharedMemIdx);
                 acc = add_g(acc, type2float(d_val));
+                dcs_val = float2type<scalar_t>(acc);
               }
               SMEMARRAY(dCDcsRTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
                         csDTileXdimThreadSharedMemIdx) = dcs_val;
@@ -714,6 +717,44 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
         __syncthreads();
+
+#ifdef OUTPUTDcsTile
+        //! DEBUG: write cumsum(Dtilde) Tile to global memory
+        // left upper corner of cWarpTileBlock in C (global memory)
+        //* cdTile Global Memory Index (Debug only)
+        const uint cdTileGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxCD + (seqLen * QtileDim) * qTileIdx;
+        const uint cdTileBlockGlobalMemIdx =
+            cdTileGridXYGlobalMemIdx + (kvTileIdx * KVtileDim * gridDim.y) +
+            (1 * KVtileDim) * blockIdx.y;
+
+        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+             ++cdWarpTileYIdx) {
+          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+               ++cdWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpTileThreadSharedMemYIdx =
+                blockDim.y * cdWarpTileYIdx + threadIdx.y;
+            const uint cdWarpTileThreadSharedMemXIdx =
+                blockDim.x * cdWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            const uint cdWarpTileBlockGlobalMemIdx =
+                cdTileBlockGlobalMemIdx +
+                (seqLen * blockDim.y) * cdWarpTileYIdx +
+                blockDim.x * cdWarpTileXIdx;
+            const uint cdWarpTileThreadGlobalMemIdx =
+                cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
+                threadIdx.x;
+
+            matC[cdWarpTileThreadGlobalMemIdx] =
+                SMEMARRAY(dCDcsRTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                          cdWarpTileThreadSharedMemXIdx);
+          }
+        }
+#endif
 
         //! sum up deltaIChunk & deltaFChunk and update in SRAM
         // sum along i-direction (qTileDim / y-dim)
@@ -853,7 +894,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               SMEMVECTOR(deltaIChunk, dIdFChunkThreadSharedMemIdx);
 
           // TODO: multiply with sigmoid derivative: sigmoid(-fGatePreact)
-          deltaFGatePreact[dIdFThreadGlobalMemIdx] =
+          // We need to shift the deltaFGatePreact by one to the right
+          // since the first forgetgate f_1 is not used in the computation.
+          // Therefore the first entry in deltaFGatePreact is 0.
+          deltaFGatePreact[dIdFThreadGlobalMemIdx + 1] =
               SMEMVECTOR(deltaFChunk, dIdFChunkThreadSharedMemIdx);
 #ifdef DEBUG_WRdeltaI
           if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx <= 8)) {

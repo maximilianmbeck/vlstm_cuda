@@ -404,7 +404,16 @@ def vlstm_parallel_bw_torch_w_groupnorm(
 
     var_C = var_QK * var_D
     delta_V = var_C.transpose(-2, -1) @ (delta_Htilde / (var_n + eps))
-    return delta_Q, delta_K, delta_V, delta_i, delta_f, delta_D, delta_Dtilde
+    return (
+        delta_Q,
+        delta_K,
+        delta_V,
+        delta_i,
+        delta_f,
+        delta_D,
+        delta_Dtilde,
+        delta_fbar,
+    )
 
 
 def vlstm_parallel_fwbw_torch_w_groupnorm(
