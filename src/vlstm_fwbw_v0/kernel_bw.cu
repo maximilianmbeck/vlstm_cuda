@@ -36,7 +36,8 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                          scalar_t *matC, scalar_t *deltaH, scalar_t *matQ,
                          scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
                          scalar_t *fGatePreact, scalar_t *vecN, scalar_t *vecM,
-                         int batchSize, int numHeads, int seqLen, int dimHeads);
+                         float *csDeltaDtildeChunk, int batchSize, int numHeads,
+                         int seqLen, int dimHeads);
 
 } // namespace kernels
 
@@ -84,7 +85,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                   scalar_t *matC, scalar_t *deltaH, scalar_t *matQ,
                   scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
                   scalar_t *fGatePreact, scalar_t *vecN, scalar_t *vecM,
-                  int batchSize, int numHeads, int seqLen, int dimHeads) {
+                  float *csDeltaDtildeChunk, int batchSize, int numHeads,
+                  int seqLen, int dimHeads) {
   // int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
@@ -1001,6 +1003,14 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
+  //? Allocate intermediate global memory for cumsum(deltaDtildeTile) along
+  // KVdim
+  uint csDeltaDTildeChunkGlobalMemSize =
+      sizeof(float) * batchSize * numHeads * QtileDim;
+  float *csDeltaDTildeChunk;
+  gpuErrchk(cudaMalloc((void **)&csDeltaDTildeChunk,
+                       csDeltaDTildeChunkGlobalMemSize));
+
   auto kernel = kernels::vlstm_bw<scalar_t, TblockDim, QtileDim, KVtileDim>;
   cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout,
                        cudaSharedmemCarveoutMaxShared);
@@ -1022,6 +1032,7 @@ void kernel_dispatchers::vlstm_bw_dispatch(
                         (void *)&fGatePreact,
                         (void *)&vecN,
                         (void *)&vecM,
+                        (void *)&csDeltaDTildeChunk,
                         (void *)&batchSize,
                         (void *)&numHeads,
                         (void *)&seqLen,
@@ -1031,6 +1042,9 @@ void kernel_dispatchers::vlstm_bw_dispatch(
                               sharedMemorySize, stream);
 
   gpuErrchk(cudaPeekAtLastError());
+
+  // free the allocated memory
+  gpuErrchk(cudaFree(csDeltaDTildeChunk));
 
   cudaStreamSynchronize(stream);
   cudaStreamDestroy(stream);

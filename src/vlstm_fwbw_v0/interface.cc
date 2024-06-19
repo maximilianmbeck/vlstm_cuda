@@ -11,6 +11,8 @@
 #include "kernel_dispatchers.h"
 #include <cassert>
 
+#define QTILE_DIM 8 // QtileDim: TileDim for Q along seqLen dim
+
 namespace vlstm {
 
 std::tuple<Tensor, Tensor, Tensor, Tensor>
@@ -51,6 +53,7 @@ interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV, Tensor iGatePreact,
       torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matQ.options());
 
   // store intermediate computations for backward pass
+  // TODO these should be deallocated autmatically by pytorch
   auto vecN = torch::zeros({batchSize, numHeads, seqLen}, matQ.options());
   auto vecM = torch::zeros({batchSize, numHeads, seqLen}, matQ.options());
 
@@ -155,6 +158,18 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
       torch::zeros({batchSize, numHeads, seqLen}, iGatePreact.options());
   auto deltaFGatePreact =
       torch::zeros({batchSize, numHeads, seqLen}, fGatePreact.options());
+
+  //* unused for now (remove later), we allocate the memory directly in the
+  //kernel *//
+  // intermediate global memory allocations:
+  // intermediate cumsums for cumsum(deltaDtilde Tile)
+  // TODO check if there is some "fast part" of the global memory
+  // TODO make this allocation in the kernel call (without torch api, e.g.
+  // cuda_malloc())
+  // -> there we know the QTILE_DIM
+  // auto csDeltaDtildeChunk = torch::zeros({batchSize, numHeads, QTILE_DIM},
+  //                                        matQ.options()); //
+  //                                        cumsum(deltaDtilde)
 
   // only for debugging: C or D matrix (S x S) (will be removed later)
   auto matC =
