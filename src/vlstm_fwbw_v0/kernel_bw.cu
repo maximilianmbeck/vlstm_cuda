@@ -108,6 +108,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
            QtileDim, KVtileDim, TblockDim);
   }
 #endif
+  // TODO can we define multiple gridGroups?
+  // -> e.g. all threadblocks with the same gridDim.x should go into one group
   cg::grid_group gridGroup = cg::this_grid();
 
   //! Shared Memory aka SRAM
@@ -192,7 +194,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   const uint numBatchHeads = batchSize * numHeads;
   // End for looplevel 0:
   const uint batchHeadEnd = CEIL_DIV(numBatchHeads, gridDim.x);
-  // looplevel 0: loop over batches and heads
+  //! looplevel 0: loop over batches and heads
   for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd; ++batchHeadIdx) {
 
     // dQ, dK, dV also have this index
@@ -218,8 +220,14 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
     }
 #endif
 
+    //! Initialize deltaQ, deltaK, deltaV to zero in HBM
+    // already done in the kernel dispatcher
+
+    //! Initialize csDeltaDTildeVec to zero in HBM
+    // TODO from here
+
     //! PARALLELIZE ALONG SEQLEN (gridDim.y)
-    // looplevel 1 (j-loop): loop over KVtile blocks along seqLen dim
+    //! looplevel 1 (j-loop): loop over KVtile blocks along seqLen dim
     // Ends for looplevel 1:
     const uint kvTileEnd = CEIL_DIV(seqLen, KVtileDim * gridDim.y);
     for (uint kvTileIdx = 0; kvTileIdx < kvTileEnd; ++kvTileIdx) {
@@ -320,7 +328,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       }
       __syncthreads();
 
-      // looplevel 2 (i-loop): loop over QTile blocks along seqLen dim
+      //! looplevel 2 (i-loop): loop over QTile blocks along seqLen dim
       const uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
       uint jIdx = blockIdx.y + kvTileIdx * gridDim.y;
       //   const uint qTileStart = FLOOR_DIV(jIdx * KVtileDim, QtileDim);
@@ -778,7 +786,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         // TODO fgate delta computation not implemented yet
 
         //* 1) Init deltaDcsIterHBM to zero in HBM
-        // TODO
+        // TODO can we do this asynchronously?
         //* 1a) Calculate local cumsum along the j-direction (kvTileDim / x-dim)
         //* 1b) If last cumsum tile col is at TB boundary (not at main
         // diagonal!)
