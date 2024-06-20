@@ -65,7 +65,7 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define OUTPUTDTile 1
 // #define OUTPUTDcsTile 1
 #define OUTPUTPRTile 1
-// #define OUTPUTPRTileR 1
+#define OUTPUTPRTileR 1
 
 // #define DEBUG_WRdeltaI 1
 // #define DEBUG_deltaISUM0 1
@@ -226,11 +226,11 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
       //* kTile, vTile Global Memory Index
       // (grid&block) offset in K,V matrix for kTile&vTile (global memory)
-      const uint kvTileGridXYGlobalMemIdx =
+      const uint kvdKdVTileGridXYGlobalMemIdx =
           batchHeadGridXGlobalMemIdxQKVdH +
           (dimHeads * KVtileDim * gridDim.y) * kvTileIdx;
-      const uint kvTileBlockGlobalMemIdx =
-          kvTileGridXYGlobalMemIdx + (dimHeads * KVtileDim) * blockIdx.y;
+      const uint kvdKdVTileBlockGlobalMemIdx =
+          kvdKdVTileGridXYGlobalMemIdx + (dimHeads * KVtileDim) * blockIdx.y;
 
       //* sTile Global Memory Index (virtual, as never materialized fully)
       // (grid&block) offset Y-axis in S = Q*K^T matrix (along sequence
@@ -296,7 +296,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           //* global memory:
           // left upper corner of kTileBlock in K (global memory)
           const uint kvWarpTileBlockGlobalMemIdx =
-              kvTileBlockGlobalMemIdx +
+              kvdKdVTileBlockGlobalMemIdx +
               (dimHeads * blockDim.y) * kvWarpTileYIdx +
               blockDim.x * kvWarpTileXIdx;
           const uint kvWarpTileThreadGlobalMemIdx =
@@ -370,6 +370,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
 
         //! Load qTile & deltaHTile in SRAM
+        // (QTileDim x dimHeads)
         // loops over rows (outer) and columns (inner) of qTile and deltaHTile
         const uint qdHWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y); // rows
         const uint qdHWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x); // cols
@@ -1029,13 +1030,133 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
 
         //! Compute deltaKTile = pTile^T  (qTile/sqrt(d)) and update in SRAM
-        // TODO
+        // (KVtileDim x dimHeads) = (KVtileDim x QtileDim) x (QtileDim x
+        // dimHeads)
+        // loops over deltaKTile rows (outer) and columns (inner)
+        const uint deltaKWarpTileYEnd = CEIL_DIV(KVtileDim, blockDim.y); // rows
+        const uint deltaKWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);  // cols
+        for (uint deltaKWarpTileYIdx = 0;
+             deltaKWarpTileYIdx < deltaKWarpTileYEnd; ++deltaKWarpTileYIdx) {
+          for (uint deltaKWarpTileXIdx = 0;
+               deltaKWarpTileXIdx < deltaKWarpTileXEnd; ++deltaKWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint deltaKWarpTileThreadSharedMemYIdx =
+                blockDim.y * deltaKWarpTileYIdx + threadIdx.y;
+            const uint deltaKWarpTileThreadSharedMemXIdx =
+                blockDim.x * deltaKWarpTileXIdx + threadIdx.x;
 
-        //! Compute deltaVTile = rTile^T  deltaHTile and update in SRAM
-        // TODO
+            // scalar_t qk_acc = dscalar_zero<scalar_t>();
+            float acc = 0.0f;
+            for (uint i = 0; i < QtileDim; ++i) {
+              acc = add_g(acc,
+                          type2float(mul_g(
+                              SMEMARRAY(sPTile, KVtileDim, i,
+                                        deltaKWarpTileThreadSharedMemYIdx),
+                              SMEMARRAY(qTile, dimHeads, i,
+                                        deltaKWarpTileThreadSharedMemXIdx))));
+            }
+
+            // compute deltaKTile
+            scalar_t deltaK_val_new =
+                float2type<scalar_t>(mul_g(acc, rsqrtf(type2float(dimHeads))));
+
+            // update deltaKTile in shared memory
+            scalar_t deltaK_val_old = SMEMARRAY(
+                deltaKTile, dimHeads, deltaKWarpTileThreadSharedMemYIdx,
+                deltaKWarpTileThreadSharedMemXIdx);
+
+            SMEMARRAY(deltaKTile, dimHeads, deltaKWarpTileThreadSharedMemYIdx,
+                      deltaKWarpTileThreadSharedMemXIdx) =
+                add_g(deltaK_val_old, deltaK_val_new);
+          }
+        }
+        __syncthreads();
+
+        //! Compute deltaVTile = rTile^T  (deltaHTile * 1 / nChunk) and update
+        //! in SRAM
+        // (KVtileDim x dimHeads) = (KVtileDim x QtileDim) x (QtileDim x
+        // dimHeads)
+        // loops over deltaKTile rows (outer) and columns (inner)
+        const uint deltaVWarpTileYEnd = CEIL_DIV(KVtileDim, blockDim.y); // rows
+        const uint deltaVWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);  // cols
+        for (uint deltaVWarpTileYIdx = 0;
+             deltaVWarpTileYIdx < deltaVWarpTileYEnd; ++deltaVWarpTileYIdx) {
+          for (uint deltaVWarpTileXIdx = 0;
+               deltaVWarpTileXIdx < deltaVWarpTileXEnd; ++deltaVWarpTileXIdx) {
+            //? deltaVTileIdxes
+            //* shared memory:
+            const uint deltaVWarpTileThreadSharedMemYIdx =
+                blockDim.y * deltaVWarpTileYIdx + threadIdx.y;
+            const uint deltaVWarpTileThreadSharedMemXIdx =
+                blockDim.x * deltaVWarpTileXIdx + threadIdx.x;
+
+            float acc = 0.0f;
+            for (uint i = 0; i < QtileDim; ++i) {
+              scalar_t r_val = SMEMARRAY(dstrRTile, KVtileDim, i,
+                                         deltaVWarpTileThreadSharedMemYIdx);
+
+              scalar_t deltaH_val = SMEMARRAY(
+                  deltaHTile, dimHeads, i, deltaVWarpTileThreadSharedMemXIdx);
+              scalar_t n_val = SMEMVECTOR(nChunk, i);
+
+              deltaH_val = div_g(deltaH_val, n_val);
+
+              acc = add_g(acc, type2float(mul_g(r_val, deltaH_val)));
+            }
+
+            // compute deltaVTile
+            scalar_t deltaV_val_new = float2type<scalar_t>(acc);
+
+            // update deltaVTile in shared memory
+            scalar_t deltaV_val_old = SMEMARRAY(
+                deltaVTile, dimHeads, deltaVWarpTileThreadSharedMemYIdx,
+                deltaVWarpTileThreadSharedMemXIdx);
+
+            SMEMARRAY(deltaVTile, dimHeads, deltaVWarpTileThreadSharedMemYIdx,
+                      deltaVWarpTileThreadSharedMemXIdx) =
+                add_g(deltaV_val_old, deltaV_val_new);
+          }
+        }
+        __syncthreads();
+
       } // end looplevel 2 (i-loop)
+
       //! Store deltaKTile & deltaVTile in HBM
-      // TODO
+      // loops over rows (outer) and columns (inner) of kTile and vTile
+      const uint dKdVWarpTileYEnd = CEIL_DIV(KVtileDim, blockDim.y); // rows
+      const uint dKdVWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);  // cols
+      for (uint dKdVWarpTileYIdx = 0; dKdVWarpTileYIdx < kvWarpTileYEnd;
+           ++dKdVWarpTileYIdx) {
+        for (uint dKdVWarpTileXIdx = 0; dKdVWarpTileXIdx < kvWarpTileXEnd;
+             ++dKdVWarpTileXIdx) {
+          //? dKdVWarpTileIdxes for k-tile AND v-tile
+          //* shared memory:
+          const uint dKdVWarpTileThreadSharedMemYIdx =
+              blockDim.y * dKdVWarpTileYIdx + threadIdx.y;
+          const uint dKdVWarpTileThreadSharedMemXIdx =
+              blockDim.x * dKdVWarpTileXIdx + threadIdx.x;
+          //* global memory:
+          // left upper corner of kTileBlock in K (global memory)
+          const uint kvWarpTileBlockGlobalMemIdx =
+              kvdKdVTileBlockGlobalMemIdx +
+              (dimHeads * blockDim.y) * dKdVWarpTileYIdx +
+              blockDim.x * dKdVWarpTileXIdx;
+          const uint kvWarpTileThreadGlobalMemIdx =
+              kvWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
+              threadIdx.x;
+
+          // write to HBM
+          deltaK[kvWarpTileThreadGlobalMemIdx] =
+              SMEMARRAY(deltaKTile, dimHeads, dKdVWarpTileThreadSharedMemYIdx,
+                        dKdVWarpTileThreadSharedMemXIdx);
+          deltaV[kvWarpTileThreadGlobalMemIdx] =
+              SMEMARRAY(deltaVTile, dimHeads, dKdVWarpTileThreadSharedMemYIdx,
+                        dKdVWarpTileThreadSharedMemXIdx);
+        }
+      }
+      __syncthreads();
+
       //! Store deltaIChunk & deltaFChunk in HBM
       // loop in j-direction (kvTileDim / x-dim)
       const uint dIdFChunkEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
@@ -1074,7 +1195,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       }
 
     } // end looplevel 1 (j-loop)
-    //! Sync deltaFChunk computation
+
   } // end looplevel 0
 } // kernels::vlstm_fw
 
