@@ -65,7 +65,7 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define OUTPUTDTile 1
 // #define OUTPUTDcsTile 1
 #define OUTPUTPRTile 1
-#define OUTPUTPRTileR 1
+// #define OUTPUTPRTileR 1
 
 // #define DEBUG_WRdeltaI 1
 // #define DEBUG_deltaISUM0 1
@@ -581,7 +581,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               scalar_t deltaDtilde_val = dscalar_zero<scalar_t>();
               if (dTileYdimThreadIdx < dTileXdimThreadIdx) {
                 // (-> in upper triangular part)
-                d_val = float2type<scalar_t>(-CUDART_INF_F);
+                // d_val = 0;
               } else {
                 scalar_t deltaD_val =
                     SMEMARRAY(dDTile, KVtileDim, dTileYdimThreadSharedMemIdx,
