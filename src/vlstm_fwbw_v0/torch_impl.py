@@ -398,9 +398,9 @@ def vlstm_parallel_bw_torch_w_groupnorm(
     delta_i = torch.sum(delta_Dtilde, dim=-2).unsqueeze_(-1)
 
     # output delta-errors / gradients
-
-    delta_Q = (delta_C * var_D) @ (keys / math.sqrt(DH))
-    delta_K = (delta_C * var_D).transpose(-2, -1) @ (queries / math.sqrt(DH))
+    mat_P = delta_C * var_D
+    delta_Q = mat_P @ (keys / math.sqrt(DH))
+    delta_K = mat_P.transpose(-2, -1) @ (queries / math.sqrt(DH))
 
     var_C = var_QK * var_D
     delta_V = var_C.transpose(-2, -1) @ (delta_Htilde / (var_n + eps))
@@ -413,6 +413,8 @@ def vlstm_parallel_bw_torch_w_groupnorm(
         delta_D,
         delta_Dtilde,
         delta_fbar,
+        mat_P,
+        var_C,
     )
 
 
