@@ -36,8 +36,8 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                          scalar_t *matC, scalar_t *deltaH, scalar_t *matQ,
                          scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
                          scalar_t *fGatePreact, scalar_t *vecN, scalar_t *vecM,
-                         float *csDeltaDtildeChunk, int batchSize, int numHeads,
-                         int seqLen, int dimHeads);
+                         float *csDeltaDTildeChunkArr, float *csDeltaDTildeVec,
+                         int batchSize, int numHeads, int seqLen, int dimHeads);
 
 } // namespace kernels
 
@@ -63,8 +63,8 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define OUTPUTdDTile 1
 // #define OUTPUTdDtildeTile 1
 // #define OUTPUTDTile 1
-// #define OUTPUTDcsTile 1
-#define OUTPUTPRTile 1
+#define OUTPUTDcsTile 1
+// #define OUTPUTPRTile 1
 #define OUTPUTPRTileR 1
 
 // #define DEBUG_WRdeltaI 1
@@ -88,8 +88,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                   scalar_t *matC, scalar_t *deltaH, scalar_t *matQ,
                   scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
                   scalar_t *fGatePreact, scalar_t *vecN, scalar_t *vecM,
-                  float *csDeltaDtildeChunk, int batchSize, int numHeads,
-                  int seqLen, int dimHeads) {
+                  float *csDeltaDTildeChunkArr, float *csDeltaDTildeVec,
+                  int batchSize, int numHeads, int seqLen, int dimHeads) {
   // int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
@@ -361,6 +361,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 vecN[nmfThreadGlobalMemIdx];
             SMEMVECTOR(mChunk, nmfThreadSharedMemIdx) =
                 vecM[nmfThreadGlobalMemIdx];
+            // TODO if deltaF is computed we need the raw preactivations
             SMEMVECTOR(fChunk, nmfThreadSharedMemIdx) =
                 logsigmoid_g(fGatePreact[nmfThreadGlobalMemIdx]);
             // without logsigmoid for debugging only:
@@ -775,7 +776,14 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! Compute csDTile = cumsum(deltaDtildeTile) (store in dCDcsTile)
         // TODO extend this with sync between thread blocks over
         // TODO fgate delta computation not implemented yet
-        // cumsum along the j-direction (kvTileDim / x-dim)
+
+        //* 1) Init deltaDcsIterHBM to zero in HBM
+        // TODO
+        //* 1a) Calculate local cumsum along the j-direction (kvTileDim / x-dim)
+        //* 1b) If last cumsum tile col is at TB boundary (not at main
+        // diagonal!)
+        //*     write to deltaDcsIterHBM[gridDim.y], sync TBs
+        // TODO
         // loop in i-direction (qTileDim / y-dim)
         const uint csDTileYdimEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
         for (uint csDtileYdimThreadSharedMemIdx = 0;
@@ -815,6 +823,17 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
         __syncthreads();
+
+        //* 2) Build the cumsum correction per TB: deltaDcsLoopHBM +
+        // sum(deltaDcsIterHBM[<gridDim.y])
+        // TODO
+
+        //* 3) Add cumsum correction to local cumsum in DcsTile
+        // TODO
+
+        //* 4) Store the cumsum result of the last col of the TB closest to the
+        // main diagonal (but not at the main diagonal!) in deltaDcsLoopHBM
+        // TODO
 
 #ifdef OUTPUTDcsTile
         //! DEBUG: write cumsum(Dtilde) Tile to global memory
@@ -1228,7 +1247,8 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const dim3 gridDims(batchSize * numHeads, 2);
+  const uint gridDimY = 2;
+  const dim3 gridDims(batchSize * numHeads, gridDimY);
   //   const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size
@@ -1276,11 +1296,20 @@ void kernel_dispatchers::vlstm_bw_dispatch(
 
   //? Allocate intermediate global memory for cumsum(deltaDtildeTile) along
   // KVdim
-  uint csDeltaDTildeChunkGlobalMemSize =
-      sizeof(float) * batchSize * numHeads * QtileDim;
-  float *csDeltaDTildeChunk;
-  gpuErrchk(cudaMalloc((void **)&csDeltaDTildeChunk,
-                       csDeltaDTildeChunkGlobalMemSize));
+  //* csDeltaDTildeChunkArr: Used for sync within all y-dim TBs
+  uint csDeltaDTildeChunkArrGlobalMemSize =
+      sizeof(float) * batchSize * numHeads * QtileDim * gridDimY;
+  float *csDeltaDTildeChunkArr;
+  gpuErrchk(cudaMalloc((void **)&csDeltaDTildeChunkArr,
+                       csDeltaDTildeChunkArrGlobalMemSize));
+
+  //* csDeltaDTildeVec: Used to store previous computations over j-iterations
+  // (iterations over the gridDimY)
+  uint csDeltaDTildeVecGlobalMemSize =
+      sizeof(float) * batchSize * numHeads * seqLen;
+  float *csDeltaDTildeVec;
+  gpuErrchk(
+      cudaMalloc((void **)&csDeltaDTildeVec, csDeltaDTildeVecGlobalMemSize));
 
   auto kernel = kernels::vlstm_bw<scalar_t, TblockDim, QtileDim, KVtileDim>;
   cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout,
@@ -1303,7 +1332,8 @@ void kernel_dispatchers::vlstm_bw_dispatch(
                         (void *)&fGatePreact,
                         (void *)&vecN,
                         (void *)&vecM,
-                        (void *)&csDeltaDTildeChunk,
+                        (void *)&csDeltaDTildeChunkArr,
+                        (void *)&csDeltaDTildeVec,
                         (void *)&batchSize,
                         (void *)&numHeads,
                         (void *)&seqLen,
@@ -1315,7 +1345,8 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   gpuErrchk(cudaPeekAtLastError());
 
   // free the allocated memory
-  gpuErrchk(cudaFree(csDeltaDTildeChunk));
+  gpuErrchk(cudaFree(csDeltaDTildeChunkArr));
+  gpuErrchk(cudaFree(csDeltaDTildeVec));
 
   cudaStreamSynchronize(stream);
   cudaStreamDestroy(stream);
