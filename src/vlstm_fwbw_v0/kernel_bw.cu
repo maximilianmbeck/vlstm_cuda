@@ -171,12 +171,12 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   // sTile (QtileDim x KVtileDim)
   scalar_t *sPTile =
       (scalar_t *)&dstrRTile[KVtileDim * (1 + SHARED_MEM_PADDING)];
-  // dDPTile (QtileDim x KVtileDim)
-  scalar_t *dDPTile =
+  // dDTile (QtileDim x KVtileDim)
+  scalar_t *dDTile =
       (scalar_t *)&sPTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
   // dCDcsRTile (QtileDim x KVtileDim)
   scalar_t *dCDcsRTile =
-      (scalar_t *)&dDPTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
+      (scalar_t *)&dDTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //* (KVtileDim x 1) chunks:
   float *fRowChunk =
@@ -480,7 +480,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 SMEMARRAY(dCDcsRTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
                           sWarpTileThreadSharedMemXIdx);
             scalar_t ddd_val = mul_g(deltaC_val, s_val);
-            SMEMARRAY(dDPTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
+            SMEMARRAY(dDTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
                       sWarpTileThreadSharedMemXIdx) = ddd_val;
           }
         }
@@ -521,7 +521,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 threadIdx.x;
 
             matC[cdWarpTileThreadGlobalMemIdx] =
-                SMEMARRAY(dDPTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                SMEMARRAY(dDTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
                           cdWarpTileThreadSharedMemXIdx);
           }
         }
@@ -576,7 +576,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               }
 
               //? Create D'Tile entries sum(f) + i
-              //? Create deltaDtildeTile entries (overwrite the dDPTile entries)
+              //? Create deltaDtildeTile entries (overwrite the dDTile entries)
               scalar_t d_val = dscalar_zero<scalar_t>();
               scalar_t deltaDtilde_val = dscalar_zero<scalar_t>();
               if (dTileYdimThreadIdx < dTileXdimThreadIdx) {
@@ -584,7 +584,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 d_val = float2type<scalar_t>(-CUDART_INF_F);
               } else {
                 scalar_t deltaD_val =
-                    SMEMARRAY(dDPTile, KVtileDim, dTileYdimThreadSharedMemIdx,
+                    SMEMARRAY(dDTile, KVtileDim, dTileYdimThreadSharedMemIdx,
                               dTileXdimThreadSharedMemIdx);
                 scalar_t m_val =
                     SMEMVECTOR(mChunk, dTileYdimThreadSharedMemIdx);
@@ -603,8 +603,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               // store the D'Tile entries in dstrRTile
               SMEMARRAY(dstrRTile, KVtileDim, dTileYdimThreadSharedMemIdx,
                         dTileXdimThreadSharedMemIdx) = d_val;
-              // store the deltaDtildeTile entries in dDPTile
-              SMEMARRAY(dDPTile, KVtileDim, dTileYdimThreadSharedMemIdx,
+              // store the deltaDtildeTile entries in dDTile
+              SMEMARRAY(dDTile, KVtileDim, dTileYdimThreadSharedMemIdx,
                         dTileXdimThreadSharedMemIdx) = deltaDtilde_val;
 
             } // end for (dTileYdimThreadSharedMemIdx)
@@ -683,7 +683,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 threadIdx.x;
 
             matC[cdWarpTileThreadGlobalMemIdx] =
-                SMEMARRAY(dDPTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                SMEMARRAY(dDTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
                           cdWarpTileThreadSharedMemXIdx);
           }
         }
@@ -720,7 +720,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               scalar_t dcs_val = dscalar_zero<scalar_t>();
               if (csDTileYdimThreadIdx > csDTileXdimThreadIdx) {
                 scalar_t d_val =
-                    SMEMARRAY(dDPTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
+                    SMEMARRAY(dDTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
                               csDTileXdimThreadSharedMemIdx);
                 acc = add_g(acc, type2float(d_val));
                 dcs_val = float2type<scalar_t>(acc);
@@ -817,7 +817,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               if (dTileYdimThreadIdx >= dTileXdimThreadIdx) {
                 //? sum the entries in deltaDtildeTile
                 scalar_t deltaI_val =
-                    SMEMARRAY(dDPTile, KVtileDim, csDtileYdimThreadSharedMemIdx,
+                    SMEMARRAY(dDTile, KVtileDim, csDtileYdimThreadSharedMemIdx,
                               dIdFChunkXdimThreadSharedMemIdx);
                 acc_deltaI = add_g(acc_deltaI, type2float(deltaI_val));
 #ifdef DEBUG_deltaISUM1
