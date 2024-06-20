@@ -334,7 +334,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         gridGroup.sync();
 
         //* qTile Global Memory Index
-        const uint qdHTileBlockGlobalMemIdx =
+        const uint qdHdQTileBlockGlobalMemIdx =
             batchHeadGridXGlobalMemIdxQKVdH + (dimHeads * QtileDim) * qTileIdx;
 
         //* nChunk, mChunk, fChunk Global Memory Index
@@ -386,7 +386,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             //* global memory:
             // left upper corner of qTileBlock in Q (global memory)
             const uint qdHWarpTileBlockGlobalMemIdx =
-                qdHTileBlockGlobalMemIdx +
+                qdHdQTileBlockGlobalMemIdx +
                 (dimHeads * blockDim.y) * qdHWarpTileYIdx +
                 blockDim.x * qdHWarpTileXIdx;
             const uint qdHWarpTileThreadGlobalMemIdx =
@@ -445,7 +445,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! Compute sTile = (qTile  kTile^T) * (1/sqrt(d)) and
         //! dDTile = deltaCTile * sTile (pointwise)
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
-        // loops over cTile rows (outer) and columns (inner)
+        // loops over sTile rows (outer) and columns (inner)
         const uint sWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
         const uint sWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
         for (uint sWarpTileYIdx = 0; sWarpTileYIdx < sWarpTileYEnd;
@@ -773,6 +773,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
         //! Compute csDTile = cumsum(deltaDtildeTile) (store in dCDcsTile)
         // TODO extend this with sync between thread blocks over
+        // TODO fgate delta computation not implemented yet
         // cumsum along the j-direction (kvTileDim / x-dim)
         // loop in i-direction (qTileDim / y-dim)
         const uint csDTileYdimEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
@@ -955,10 +956,77 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }   // end for (csDtileXdimThreadSharedMemIdx)
 
         //! Compute deltaQTile = pTile  (kTile/sqrt(d))
-        // TODO
+        // (QtileDim x dimHeads) = (QtileDim x KVtileDim) x (KVtileDim x
+        // dimHeads)
+        // loops over deltaQTile rows (outer) and columns (inner)
+        const uint deltaQWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y); // rows
+        const uint deltaQWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x); // cols
+        for (uint deltaQWarpTileYIdx = 0;
+             deltaQWarpTileYIdx < deltaQWarpTileYEnd; ++deltaQWarpTileYIdx) {
+          for (uint deltaQWarpTileXIdx = 0;
+               deltaQWarpTileXIdx < deltaQWarpTileXEnd; ++deltaQWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint deltaQWarpTileThreadSharedMemYIdx =
+                blockDim.y * deltaQWarpTileYIdx + threadIdx.y;
+            const uint deltaQWarpTileThreadSharedMemXIdx =
+                blockDim.x * deltaQWarpTileXIdx + threadIdx.x;
+
+            // scalar_t qk_acc = dscalar_zero<scalar_t>();
+            float acc = 0.0f;
+            for (uint i = 0; i < KVtileDim; ++i) {
+              acc = add_g(
+                  acc, type2float(mul_g(
+                           SMEMARRAY(sPTile, KVtileDim,
+                                     deltaQWarpTileThreadSharedMemYIdx, i),
+                           SMEMARRAY(kTile, dimHeads,
+                                     deltaQWarpTileThreadSharedMemXIdx, i))));
+            }
+
+            // compute deltaQTile
+            scalar_t deltaQ_val =
+                float2type<scalar_t>(mul_g(acc, rsqrtf(type2float(dimHeads))));
+            SMEMARRAY(deltaQTile, dimHeads, deltaQWarpTileThreadSharedMemYIdx,
+                      deltaQWarpTileThreadSharedMemXIdx) = deltaQ_val;
+          }
+        }
+        __syncthreads();
 
         //! Atomic add deltaQTile to deltaQ in HBM (HOW TO DO??)
-        // TODO check how to do this
+        // We sum up the deltaQTiles in the different thread blocks in the
+        // global memory loops over rows (outer) and columns (inner) of
+        // deltaQTile
+        for (uint deltaQWarpTileYIdx = 0;
+             deltaQWarpTileYIdx < deltaQWarpTileYEnd; ++deltaQWarpTileYIdx) {
+          for (uint deltaQWarpTileXIdx = 0;
+               deltaQWarpTileXIdx < deltaQWarpTileXEnd; ++deltaQWarpTileXIdx) {
+
+            //? deltaQWarpTileIdxes for deltaQ-tile
+            //* shared memory:
+            const uint deltaQWarpTileThreadSharedMemYIdx =
+                blockDim.y * deltaQWarpTileYIdx + threadIdx.y;
+            const uint deltaQWarpTileThreadSharedMemXIdx =
+                blockDim.x * deltaQWarpTileXIdx + threadIdx.x;
+
+            //* global memory:
+            // left upper corner of qTileBlock in Q (global memory)
+            const uint deltaQWarpTileBlockGlobalMemIdx =
+                qdHdQTileBlockGlobalMemIdx +
+                (dimHeads * blockDim.y) * deltaQWarpTileYIdx +
+                blockDim.x * deltaQWarpTileXIdx;
+            const uint deltaQWarpTileThreadGlobalMemIdx =
+                deltaQWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
+                threadIdx.x;
+
+            // load deltaQ val from shared memory
+            scalar_t deltaQ_val = SMEMARRAY(deltaQTile, dimHeads,
+                                            deltaQWarpTileThreadSharedMemYIdx,
+                                            deltaQWarpTileThreadSharedMemXIdx);
+
+            // atomic add to deltaQ in HBM
+            atomicAdd(&(deltaQ[deltaQWarpTileThreadGlobalMemIdx]), deltaQ_val);
+          }
+        }
 
         //! Compute deltaKTile = pTile^T  (qTile/sqrt(d)) and update in SRAM
         // TODO
