@@ -61,9 +61,12 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
 #define DEBUG 1
 // #define OUTPUTdDTile 1
-// #define OUTPUTdDtildeTile 1
-#define OUTPUTDTile 1
+#define OUTPUTdDtildeTile 1
+// #define OUTPUTDTile 1
 // #define OUTPUTDcsTile 1
+// #define OUTPUTRPTileR 1
+// #define OUTPUTRPTileP 1
+
 // #define DEBUG_WRdeltaI 1
 // #define DEBUG_deltaISUM0 1
 // #define DEBUG_deltaISUM1 1
@@ -162,14 +165,15 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
   //? intermediate tiles
   //* (QtileDim x KVtileDim) tiles:
-  // dstrTile (QtileDim x KVtileDim)
-  scalar_t *dstrTile =
+  // dstrRTile (QtileDim x KVtileDim)
+  scalar_t *dstrRTile =
       (scalar_t *)&deltaFChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
   // sTile (QtileDim x KVtileDim)
-  scalar_t *sTile = (scalar_t *)&dstrTile[KVtileDim * (1 + SHARED_MEM_PADDING)];
+  scalar_t *sPTile =
+      (scalar_t *)&dstrRTile[KVtileDim * (1 + SHARED_MEM_PADDING)];
   // dDPTile (QtileDim x KVtileDim)
   scalar_t *dDPTile =
-      (scalar_t *)&sTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
+      (scalar_t *)&sPTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
   // dCDcsRTile (QtileDim x KVtileDim)
   scalar_t *dCDcsRTile =
       (scalar_t *)&dDPTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
@@ -469,7 +473,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             // compute sTile
             scalar_t s_val =
                 float2type<scalar_t>(mul_g(acc, rsqrtf(type2float(dimHeads))));
-            SMEMARRAY(sTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
+            SMEMARRAY(sPTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
                       sWarpTileThreadSharedMemXIdx) = s_val;
             // compute dDTile
             scalar_t deltaC_val =
@@ -596,8 +600,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 }
                 deltaDtilde_val = mul_g(deltaD_val, d_val);
               }
-              // store the D'Tile entries in dstrTile
-              SMEMARRAY(dstrTile, KVtileDim, dTileYdimThreadSharedMemIdx,
+              // store the D'Tile entries in dstrRTile
+              SMEMARRAY(dstrRTile, KVtileDim, dTileYdimThreadSharedMemIdx,
                         dTileXdimThreadSharedMemIdx) = d_val;
               // store the deltaDtildeTile entries in dDPTile
               SMEMARRAY(dDPTile, KVtileDim, dTileYdimThreadSharedMemIdx,
@@ -640,7 +644,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 threadIdx.x;
 
             matC[cdWarpTileThreadGlobalMemIdx] =
-                SMEMARRAY(dstrTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                SMEMARRAY(dstrRTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
                           cdWarpTileThreadSharedMemXIdx);
           }
         }
@@ -686,6 +690,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
 
         //! Compute csDTile = cumsum(deltaDtildeTile) (store in dCDcsRTile)
+        // TODO extend this with sync between thread blocks over
         // cumsum along the j-direction (kvTileDim / x-dim)
         // loop in i-direction (qTileDim / y-dim)
         const uint csDTileYdimEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
@@ -869,8 +874,29 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
         //! Compute pTile = deltaCTile * D'Tile
         //! Compute rTile = sTile * D'Tile
-        // TODO
-        // TODO
+        // left upper corner of cWarpTileBlock in C (global memory)
+        const uint prWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint prWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint prWarpTileYIdx = 0; prWarpTileYIdx < prWarpTileYEnd;
+             ++prWarpTileYIdx) {
+          for (uint prWarpTileXIdx = 0; prWarpTileXIdx < prWarpTileXEnd;
+               ++prWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint prWarpTileThreadSharedMemYIdx =
+                blockDim.y * prWarpTileYIdx + threadIdx.y;
+            const uint prWarpTileThreadSharedMemXIdx =
+                blockDim.x * prWarpTileXIdx + threadIdx.x;
+
+            // loading from shared memory
+            scalar_t deltaC_val =
+                SMEMARRAY(dCDcsRTile, KVtileDim, prWarpTileThreadSharedMemYIdx,
+                          prWarpTileThreadSharedMemXIdx);
+            // pointwise operations
+
+            // store in shared memory
+          }
+        }
 
         //! Compute deltaQTile = pTile  (kTile/sqrt(d))
         // TODO
