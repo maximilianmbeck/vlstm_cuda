@@ -174,13 +174,13 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   // dDTile (QtileDim x KVtileDim)
   scalar_t *dDTile =
       (scalar_t *)&sPTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
-  // dCDcsRTile (QtileDim x KVtileDim)
-  scalar_t *dCDcsRTile =
+  // dCDcsTile (QtileDim x KVtileDim)
+  scalar_t *dCDcsTile =
       (scalar_t *)&dDTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //* (KVtileDim x 1) chunks:
   float *fRowChunk =
-      (float *)&dCDcsRTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
+      (float *)&dCDcsTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //? flatten the threads to 1D
   const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
@@ -435,7 +435,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
             // we first cast to scalar_t and then divide (this will also the
             // case for tensor cores)
-            SMEMARRAY(dCDcsRTile, KVtileDim, cWarpTileThreadSharedMemYIdx,
+            SMEMARRAY(dCDcsTile, KVtileDim, cWarpTileThreadSharedMemYIdx,
                       cWarpTileThreadSharedMemXIdx) =
                 div_g(float2type<scalar_t>(acc), nChunkVal);
           }
@@ -477,7 +477,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                       sWarpTileThreadSharedMemXIdx) = s_val;
             // compute dDTile
             scalar_t deltaC_val =
-                SMEMARRAY(dCDcsRTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
+                SMEMARRAY(dCDcsTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
                           sWarpTileThreadSharedMemXIdx);
             scalar_t ddd_val = mul_g(deltaC_val, s_val);
             SMEMARRAY(dDTile, KVtileDim, sWarpTileThreadSharedMemYIdx,
@@ -689,7 +689,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
 #endif
 
-        //! Compute csDTile = cumsum(deltaDtildeTile) (store in dCDcsRTile)
+        //! Compute csDTile = cumsum(deltaDtildeTile) (store in dCDcsTile)
         // TODO extend this with sync between thread blocks over
         // cumsum along the j-direction (kvTileDim / x-dim)
         // loop in i-direction (qTileDim / y-dim)
@@ -725,7 +725,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 acc = add_g(acc, type2float(d_val));
                 dcs_val = float2type<scalar_t>(acc);
               }
-              SMEMARRAY(dCDcsRTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
+              SMEMARRAY(dCDcsTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
                         csDTileXdimThreadSharedMemIdx) = dcs_val;
             }
           }
@@ -764,7 +764,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 threadIdx.x;
 
             matC[cdWarpTileThreadGlobalMemIdx] =
-                SMEMARRAY(dCDcsRTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                SMEMARRAY(dCDcsTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
                           cdWarpTileThreadSharedMemXIdx);
           }
         }
@@ -839,7 +839,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               if (dTileYdimThreadIdx > dTileXdimThreadIdx) {
                 //? sum the entries in DcsTile
                 scalar_t deltaF_val = SMEMARRAY(
-                    dCDcsRTile, KVtileDim, csDtileYdimThreadSharedMemIdx,
+                    dCDcsTile, KVtileDim, csDtileYdimThreadSharedMemIdx,
                     dIdFChunkXdimThreadSharedMemIdx);
                 acc_deltaF = add_g(acc_deltaF, type2float(deltaF_val));
               }
@@ -890,7 +890,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
             // loading from shared memory
             scalar_t deltaC_val =
-                SMEMARRAY(dCDcsRTile, KVtileDim, prWarpTileThreadSharedMemYIdx,
+                SMEMARRAY(dCDcsTile, KVtileDim, prWarpTileThreadSharedMemYIdx,
                           prWarpTileThreadSharedMemXIdx);
             // pointwise operations
 
