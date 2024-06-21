@@ -71,8 +71,10 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define DEBUG_deltaISUM0 1
 // #define DEBUG_deltaISUM1 1
 // #define DEBUG_deltaISUM2 1
-#define DEBUG_deltaFCSUM0 1
-#define DEBUG_IJIDX 1
+
+// #define DEBUG_IJIDX 1
+
+#define DEBUG_DeltaDCS0 1
 
 /**
 Conventions:
@@ -183,7 +185,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
   //* (KVtileDim x 1) chunks:
   float *fRowDeltaDcsCorrChunk =
-      (float *)&dCDcsTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
+      (float *)(&(dCDcsTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)]));
 
   //? flatten the threads to 1D
   const uint flatThreadIdx = blockDim.x * threadIdx.y + threadIdx.x;
@@ -882,6 +884,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                   deltaDcsChunkArrGridXYGlobalMemIdx +
                   csDTileYdimThreadSharedMemIdx;
               csDeltaDTildeChunkArr[deltaDcsChunkArrThreadGlobalMemIdx] = acc;
+              // TODO look at acc value here
             }
           }
         }
@@ -918,13 +921,44 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               total_cumsum_corr = add_g(
                   total_cumsum_corr,
                   csDeltaDTildeChunkArr[deltaDcsChunkArrThreadGlobalMemIdx]);
+
+#ifdef DEBUG_DeltaDCS0
+              if ((blockIdx.x == 0) && (blockIdx.y <= 1) && (jIdx == 1) &&
+                  (flatThreadIdx <= 8)) {
+                printf("blockIdx(x,y)=(%d,%d), FTIdx=%d, ijIdx(i,j)=(%d,%d), "
+                       "sTileXYIdx(x,y)=(%d,%d), csDYdimSMIdx=%d, bIdxY=%d, "
+                       "tot_cs_cor=%f\n",
+                       blockIdx.x, blockIdx.y, flatThreadIdx, iIdx, jIdx,
+                       sTileXdimBlockYIdx, sTileYdimBlockYIdx,
+                       csDTileYdimThreadSharedMemIdx, blockIdxY,
+                       total_cumsum_corr);
+              }
+#endif
             }
             // store the total cumsum correction in fRowDeltaDcsCorrChunk
-            SMEMVECTOR(fRowDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx) =
-                total_cumsum_corr;
+            // TODO from here, when I uncomment this the first tile col gets
+            // wrong
+            // -> probably the shared memory space is somehow overriden????
+            //! ERROR!!!!!!!
+            // SMEMVECTOR(fRowDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx)
+            // =
+            //     total_cumsum_corr;
+
+#ifdef DEBUG_DeltaDCS1
+            if ((blockIdx.x == 0) && (blockIdx.y <= 1) && (jIdx == 0) &&
+                (flatThreadIdx <= 8)) {
+              printf("blockIdx(x,y)=(%d,%d), FTIdx=%d, ijIdx(i,j)=(%d,%d), "
+                     "sTileXYIdx(x,y)=(%d,%d), csDYdimSMIdx=%d, "
+                     "tot_cs_cor=%f\n",
+                     blockIdx.x, blockIdx.y, flatThreadIdx, iIdx, jIdx,
+                     sTileXdimBlockYIdx, sTileYdimBlockYIdx,
+                     csDTileYdimThreadSharedMemIdx, total_cumsum_corr);
+            }
+#endif
           }
         }
 
+#ifdef xx
         //* 3) Add cumsum correction to local cumsum in DcsTile
         // outer loop: in j-direction (qTileDim / y-dim) with flattened threads
         // inner loop: in i-direction (kvTileDim / x-dim) per thread
@@ -973,7 +1007,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             }
           }
         }
-
+#endif
         //* 4) Store the cumsum result of the last col of the TB closest to
         // the
         // main diagonal (but not at the main diagonal!) in deltaDcsLoopHBM
