@@ -189,8 +189,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStepQKVdH = seqLen * dimHeads;
-  const uint batchHeadStepIFNMgate = seqLen * 1;
+  const uint batchHeadStepIFNMgate =
+      seqLen * 1; // TODO rename: csDeltaDTildeVec has same step
   const uint batchHeadStepCD = seqLen * seqLen;
+  const uint batchHeadStepDeltaDcsChunkArr = gridDim.y * QtileDim;
   const uint numBatchHeads = batchSize * numHeads;
   // End for looplevel 0:
   const uint batchHeadEnd = CEIL_DIV(numBatchHeads, gridDim.x);
@@ -198,17 +200,21 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   for (uint batchHeadIdx = 0; batchHeadIdx < batchHeadEnd; ++batchHeadIdx) {
 
     // dQ, dK, dV also have this index
-    uint batchHeadGridXGlobalMemIdxQKVdH =
+    const uint batchHeadGridXGlobalMemIdxQKVdH =
         (batchHeadStepQKVdH * gridDim.x) * batchHeadIdx +
         (batchHeadStepQKVdH)*blockIdx.x;
 
-    uint batchHeadGridXGlobalMemIdxIFNMgate =
+    const uint batchHeadGridXGlobalMemIdxIFNMgate =
         (batchHeadStepIFNMgate * gridDim.x) * batchHeadIdx +
         (batchHeadStepIFNMgate)*blockIdx.x;
 
-    uint batchHeadGridXGlobalMemIdxCD =
+    const uint batchHeadGridXGlobalMemIdxCD =
         (batchHeadStepCD * gridDim.x) * batchHeadIdx +
         (batchHeadStepCD)*blockIdx.x;
+
+    const uint batchHeadGridXGlobalMemIdxDeltaDcsChunkArr =
+        (batchHeadStepDeltaDcsChunkArr * gridDim.x) * batchHeadIdx +
+        (batchHeadStepDeltaDcsChunkArr)*blockIdx.x;
 
 #ifdef DEBUG5
     if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
@@ -221,10 +227,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
 
     //! Initialize deltaQ, deltaK, deltaV to zero in HBM
-    // already done in the kernel dispatcher
+    // already done in the kernel dispatcher, via torch::zeros()
 
     //! Initialize csDeltaDTildeVec to zero in HBM
-    // TODO from here
+    // already done in the kernel dispatcher, via cudaMemset
 
     //! PARALLELIZE ALONG SEQLEN (gridDim.y)
     //! looplevel 1 (j-loop): loop over KVtile blocks along seqLen dim
@@ -739,7 +745,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
 
 #ifdef OUTPUTPRTile
-        //! DEBUG: write cumsum(Dtilde) Tile to global memory
+        //! DEBUG: write P or R Tile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
         //* cdTile Global Memory Index (Debug only)
         const uint cdTileGridXYGlobalMemIdx =
@@ -786,11 +792,36 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         // TODO fgate delta computation not implemented yet
 
         //* 1) Init deltaDcsIterHBM to zero in HBM
-        // TODO can we do this asynchronously?
+        // deltaDcsIterHBM: (gridDim.y x QTileDim)
+        const uint deltaDcsChunkArrGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxDeltaDcsChunkArr + (QtileDim)*blockIdx.y;
+        // we flatten the threads to 1D along the y-dim (qTileDim)
+        // in this way we make sure that global mem access is coalesced
+        const uint deltaDcsChunkArrQTileDirEnd =
+            CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
+        for (uint deltaDcsChunkArrQTileDirIdx = 0;
+             deltaDcsChunkArrQTileDirIdx < deltaDcsChunkArrQTileDirEnd;
+             ++deltaDcsChunkArrQTileDirIdx) {
+          //? deltaDcsIterHBM idxes
+          //* TB local idx
+          const uint deltaDcsChunkArrQTileDirThreadSharedMemIdx =
+              flatThreadIdx +
+              blockDim.x * blockDim.y * deltaDcsChunkArrQTileDirIdx;
+          //* global memory
+          const uint deltaDcsIterHBMXYQtileGlobalMemIdx =
+              deltaDcsChunkArrGridXYGlobalMemIdx +
+              deltaDcsChunkArrQTileDirThreadSharedMemIdx;
+
+          if (deltaDcsChunkArrQTileDirThreadSharedMemIdx < QtileDim) {
+            // set to 0.0f
+            csDeltaDTildeChunkArr[deltaDcsIterHBMXYQtileGlobalMemIdx] =
+                dscalar_zero<float>();
+          }
+        }
+        __syncthreads();
         //* 1a) Calculate local cumsum along the j-direction (kvTileDim / x-dim)
         //* 1b) If last cumsum tile col is at TB boundary (not at main
-        // diagonal!)
-        //*     write to deltaDcsIterHBM[gridDim.y], sync TBs
+        //* diagonal!), write to deltaDcsIterHBM[gridDim.y], sync TBs
         // TODO
         // loop in i-direction (qTileDim / y-dim)
         const uint csDTileYdimEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
@@ -1318,6 +1349,10 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   float *csDeltaDTildeVec;
   gpuErrchk(
       cudaMalloc((void **)&csDeltaDTildeVec, csDeltaDTildeVecGlobalMemSize));
+  // init the memory to zero
+  // cudaMemset only works with integers, but float 0.0 has 0000 0000 in binary,
+  // so it should work
+  gpuErrchk(cudaMemset(csDeltaDTildeVec, 0, csDeltaDTildeVecGlobalMemSize));
 
   auto kernel = kernels::vlstm_bw<scalar_t, TblockDim, QtileDim, KVtileDim>;
   cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout,
