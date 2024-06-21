@@ -72,6 +72,7 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define DEBUG_deltaISUM1 1
 // #define DEBUG_deltaISUM2 1
 #define DEBUG_deltaFCSUM0 1
+#define DEBUG_IJIDX 1
 
 /**
 Conventions:
@@ -336,7 +337,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
       //! looplevel 2 (i-loop): loop over QTile blocks along seqLen dim
       const uint qTileEnd = CEIL_DIV(seqLen, QtileDim);
-      uint jIdx = blockIdx.y + kvTileIdx * gridDim.y;
+      const uint jIdx = blockIdx.y + kvTileIdx * gridDim.y;
       //   const uint qTileStart = FLOOR_DIV(jIdx * KVtileDim, QtileDim);
       //? We start from the first QTile such that we can sync the threadblocks
       //? globally, and ensure that they are in sync for the next KVtile
@@ -346,7 +347,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
         //? Global Sync
         gridGroup.sync();
-
+        const uint iIdx = qTileIdx;
         //* qTile Global Memory Index
         const uint qdHdQTileBlockGlobalMemIdx =
             batchHeadGridXGlobalMemIdxQKVdH + (dimHeads * QtileDim) * qTileIdx;
@@ -358,6 +359,15 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //* sTile Global Memory Index
         const uint sTileYdimGridYIdx = QtileDim * qTileIdx;
         const uint sTileYdimBlockYIdx = sTileYdimGridYIdx;
+
+#ifdef DEBUG_IJIDX
+        if ((blockIdx.x == 0) && (blockIdx.y <= 1) && (flatThreadIdx == 0)) {
+          printf("blockIdx(x,y)=(%d,%d), ijIdx(i,j)=(%d,%d), "
+                 "sTileXYIdx(x,y)=(%d,%d), kvTileIdx=%d, qTileIdx=%d\n",
+                 blockIdx.x, blockIdx.y, iIdx, jIdx, sTileXdimBlockYIdx,
+                 sTileYdimBlockYIdx, kvTileIdx, qTileIdx);
+        }
+#endif
 
         //! Load nChunk, mChunk, fChunk in SRAM
         const uint nmfChunkEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
@@ -819,10 +829,11 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
         __syncthreads();
+
         //* 1a) Calculate local cumsum along the j-direction (kvTileDim / x-dim)
         //* 1b) If last cumsum tile col is at TB boundary (not at main
         //* diagonal!), write to deltaDcsIterHBM[gridDim.y], sync TBs
-        // TODO
+        // TODO from here
         // loop in i-direction (qTileDim / y-dim)
         const uint csDTileYdimEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
         for (uint csDtileYdimThreadSharedMemIdx = 0;
@@ -841,6 +852,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
           if (csDTileYdimThreadSharedMemIdx < QtileDim) {
             float acc = 0.0f;
+            bool reachedMainDiagonal = false;
             for (uint csDTileXdimThreadSharedMemIdx = 0;
                  csDTileXdimThreadSharedMemIdx < KVtileDim;
                  ++csDTileXdimThreadSharedMemIdx) {
@@ -855,9 +867,18 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                               csDTileXdimThreadSharedMemIdx);
                 acc = add_g(acc, type2float(d_val));
                 dcs_val = float2type<scalar_t>(acc);
+              } else {
+                reachedMainDiagonal = true;
               }
               SMEMARRAY(dCDcsTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
                         csDTileXdimThreadSharedMemIdx) = dcs_val;
+            }
+            if (!reachedMainDiagonal) {
+              // write to global memory
+              const uint deltaDcsChunkArrThreadGlobalMemIdx =
+                  deltaDcsChunkArrGridXYGlobalMemIdx +
+                  csDTileYdimThreadSharedMemIdx;
+              csDeltaDTildeChunkArr[deltaDcsChunkArrThreadGlobalMemIdx] = acc;
             }
           }
         }
