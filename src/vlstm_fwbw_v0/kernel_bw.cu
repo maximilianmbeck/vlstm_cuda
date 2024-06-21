@@ -182,7 +182,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       (scalar_t *)&dDTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //* (KVtileDim x 1) chunks:
-  float *fRowChunk =
+  float *fRowDeltaDcsCorrChunk =
       (float *)&dCDcsTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //? flatten the threads to 1D
@@ -263,7 +263,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       const uint iChunkBlockGlobalMemIdx =
           iChunkGridXYGlobalMemIdx + (1 * KVtileDim) * blockIdx.y;
 
-      //! Load iChunk, Init deltaIChunk, deltaFChunk & fRowChunk to zero in SRAM
+      //! Load iChunk, Init deltaIChunk, deltaFChunk & fRowDeltaDcsCorrChunk to
+      //! zero in SRAM
       const uint idFdIChunkEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
       for (uint idFdIChunkIdx = 0; idFdIChunkIdx < idFdIChunkEnd;
            ++idFdIChunkIdx) {
@@ -282,7 +283,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               dscalar_zero<scalar_t>();
           SMEMVECTOR(deltaFChunk, idFdIThreadSharedMemIdx) =
               dscalar_zero<scalar_t>();
-          SMEMVECTOR(fRowChunk, idFdIThreadSharedMemIdx) = 0.0f;
+          SMEMVECTOR(fRowDeltaDcsCorrChunk, idFdIThreadSharedMemIdx) = 0.0f;
         }
       }
       __syncthreads();
@@ -556,7 +557,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! compute deltaDtildeTile = deltaDTile * D'Tile
         // flatten all threads to 1D along kvTileDim (j-direction),
         // sum up the f gate values in i-direction (qTileDim),
-        // store the last row of the D'Tile in fRowChunk
+        // store the last row of the D'Tile in fRowDeltaDcsCorrChunk
         // take care of causality
 
         // loop in j-direction (kvTileDim / x-dim)
@@ -578,7 +579,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 SMEMVECTOR(iChunk, dTileXdimThreadSharedMemIdx);
 
             // sum up f gate values in i-direction
-            float f_acc = SMEMVECTOR(fRowChunk, dTileXdimThreadSharedMemIdx);
+            float f_acc =
+                SMEMVECTOR(fRowDeltaDcsCorrChunk, dTileXdimThreadSharedMemIdx);
             // loop in j-direction (qTileDim / y-dim)
             for (uint dTileYdimThreadSharedMemIdx = 0;
                  dTileYdimThreadSharedMemIdx < QtileDim;
@@ -596,9 +598,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                     SMEMVECTOR(fChunk, dTileYdimThreadSharedMemIdx);
                 f_acc = add_g(f_acc, type2float(f_val));
               }
-              // store the last row of D'Tile in fRowChunk
+              // store the last row of D'Tile in fRowDeltaDcsCorrChunk
               if (dTileYdimThreadSharedMemIdx == QtileDim - 1) {
-                SMEMVECTOR(fRowChunk, dTileXdimThreadSharedMemIdx) = f_acc;
+                SMEMVECTOR(fRowDeltaDcsCorrChunk, dTileXdimThreadSharedMemIdx) =
+                    f_acc;
               }
 
               //? Create D'Tile entries sum(f) + i
@@ -677,6 +680,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
         //! Compute deltaDtildeTile = deltaDTile * D'Tile
         // Computed with pointwise multiplication in the previous step
+
 #ifdef OUTPUTdDtildeTile
         //! DEBUG: write Dtilde Tile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
@@ -833,7 +837,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //* 1a) Calculate local cumsum along the j-direction (kvTileDim / x-dim)
         //* 1b) If last cumsum tile col is at TB boundary (not at main
         //* diagonal!), write to deltaDcsIterHBM[gridDim.y], sync TBs
-        // TODO from here
         // loop in i-direction (qTileDim / y-dim)
         const uint csDTileYdimEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
         for (uint csDtileYdimThreadSharedMemIdx = 0;
@@ -883,15 +886,96 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
         __syncthreads();
+        gridGroup.sync();
 
         //* 2) Build the cumsum correction per TB: deltaDcsLoopHBM +
-        // sum(deltaDcsIterHBM[<gridDim.y])
-        // TODO
+        // sum(deltaDcsIterHBM[<blockIdx.y])
+        // store the result in fRowDeltaDcsCorrChunk in SRAM
+        // loop in i-direction (qTileDim / y-dim) with flattened threads
+        for (uint csDtileYdimThreadSharedMemIdx = 0;
+             csDtileYdimThreadSharedMemIdx < csDTileYdimEnd;
+             ++csDtileYdimThreadSharedMemIdx) {
+          //? csDTile idxes
+          //* shared memory
+          const uint csDTileYdimThreadSharedMemIdx =
+              flatThreadIdx +
+              blockDim.x * blockDim.y * csDtileYdimThreadSharedMemIdx;
+
+          if (csDTileYdimThreadSharedMemIdx < QtileDim) {
+            const uint csDeltaDTildeVecThreadGlobalMemIdx =
+                nmfChunkBlockGlobalMemIdx + csDTileYdimThreadSharedMemIdx;
+            // load the global cumsum correction from HBM
+            // and init the total cumusum correction in fRowDeltaDcsCorrChunk
+            float total_cumsum_corr =
+                csDeltaDTildeVec[csDeltaDTildeVecThreadGlobalMemIdx];
+
+            // loop over gridDim.y and sum up the cumsum corrections
+            // of the other thread blocks with lower blockIdx.y
+            for (uint blockIdxY = 0; blockIdxY < blockIdx.y; ++blockIdxY) {
+              const uint deltaDcsChunkArrThreadGlobalMemIdx =
+                  batchHeadGridXGlobalMemIdxDeltaDcsChunkArr +
+                  QtileDim * blockIdxY + csDTileYdimThreadSharedMemIdx;
+              total_cumsum_corr = add_g(
+                  total_cumsum_corr,
+                  csDeltaDTildeChunkArr[deltaDcsChunkArrThreadGlobalMemIdx]);
+            }
+            // store the total cumsum correction in fRowDeltaDcsCorrChunk
+            SMEMVECTOR(fRowDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx) =
+                total_cumsum_corr;
+          }
+        }
 
         //* 3) Add cumsum correction to local cumsum in DcsTile
-        // TODO
+        // outer loop: in j-direction (qTileDim / y-dim) with flattened threads
+        // inner loop: in i-direction (kvTileDim / x-dim) per thread
+        for (uint csDtileYdimThreadSharedMemIdx = 0;
+             csDtileYdimThreadSharedMemIdx < csDTileYdimEnd;
+             ++csDtileYdimThreadSharedMemIdx) {
+          //? csDTile idxes
+          //* shared memory
+          const uint csDTileYdimThreadSharedMemIdx =
+              flatThreadIdx +
+              blockDim.x * blockDim.y * csDtileYdimThreadSharedMemIdx;
+          //* csDTile global index (y-dim / QtileDim) (virtual, as never
+          // materialized fully)
+          const uint csDTileYdimThreadIdx =
+              sTileYdimBlockYIdx + csDTileYdimThreadSharedMemIdx;
 
-        //* 4) Store the cumsum result of the last col of the TB closest to the
+          if (csDTileYdimThreadSharedMemIdx < QtileDim) {
+            const uint csDeltaDTildeVecThreadGlobalMemIdx =
+                nmfChunkBlockGlobalMemIdx + csDTileYdimThreadSharedMemIdx;
+
+            // load the total cumsum correction from SRAM
+            scalar_t total_cumsum_corr = float2type<scalar_t>(SMEMVECTOR(
+                fRowDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx));
+
+            for (uint csDTileXdimThreadSharedMemIdx = 0;
+                 csDTileXdimThreadSharedMemIdx < KVtileDim;
+                 ++csDTileXdimThreadSharedMemIdx) {
+              //* csDtile global index (x-dim / KVtiledim) (virtual, as never
+              // materialized fully)
+              const uint csDTileXdimThreadIdx =
+                  sTileXdimBlockYIdx + csDTileXdimThreadSharedMemIdx;
+
+              if (csDTileYdimThreadIdx > csDTileXdimThreadIdx) {
+                // below main diagonal
+                // load&update the cumsum(Dtilde) val
+                scalar_t dcs_corr_val = SMEMARRAY(
+                    dCDcsTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
+                    csDTileXdimThreadSharedMemIdx);
+
+                dcs_corr_val = add_g(dcs_corr_val, total_cumsum_corr);
+
+                // store the updated cumsum(Dtilde) val
+                SMEMARRAY(dCDcsTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
+                          csDTileXdimThreadSharedMemIdx) = dcs_corr_val;
+              }
+            }
+          }
+        }
+
+        //* 4) Store the cumsum result of the last col of the TB closest to
+        // the
         // main diagonal (but not at the main diagonal!) in deltaDcsLoopHBM
         // TODO
 
@@ -1340,8 +1424,11 @@ void kernel_dispatchers::vlstm_bw_dispatch(
       sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
 
   // we keep these as float as it acts as accumulator
+  // we set it to QtileDim since (KVtileDim <= QtileDim)
+  // we use it to store the cumsum correction of deltaDtildeTile
+  // and the fTileRow during D' computation
   const uint fTileRowSharedMemSize =
-      sizeof(float) * KVtileDim * (1 + SHARED_MEM_PADDING);
+      sizeof(float) * QtileDim * (1 + SHARED_MEM_PADDING);
 
   const uint sharedMemorySize =
       3 * qdQdHTileSharedMemSize + 4 * kvdKdVTileSharedMemSize +
@@ -1357,7 +1444,8 @@ void kernel_dispatchers::vlstm_bw_dispatch(
 
   // TODO bring this back later. For debugging purposes, we need to allocate
   // memory in torch
-  //   //? Allocate intermediate global memory for cumsum(deltaDtildeTile) along
+  //   //? Allocate intermediate global memory for cumsum(deltaDtildeTile)
+  //   along
   //   // KVdim
   //   //* csDeltaDTildeChunkArr: Used for sync within all y-dim TBs
   //   uint csDeltaDTildeChunkArrGlobalMemSize =
