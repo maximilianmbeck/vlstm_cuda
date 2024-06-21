@@ -112,7 +112,7 @@ interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV, Tensor iGatePreact,
   return std::make_tuple(matH, vecN, vecM, matC);
 }
 
-std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor, Tensor>
+std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor>
 interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
                     Tensor iGatePreact, Tensor fGatePreact, Tensor vecN,
                     Tensor vecM) {
@@ -160,16 +160,19 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
       torch::zeros({batchSize, numHeads, seqLen}, fGatePreact.options());
 
   //* unused for now (remove later), we allocate the memory directly in the
-  //kernel *//
+  // kernel *//
   // intermediate global memory allocations:
   // intermediate cumsums for cumsum(deltaDtilde Tile)
   // TODO check if there is some "fast part" of the global memory
   // TODO make this allocation in the kernel call (without torch api, e.g.
   // cuda_malloc())
   // -> there we know the QTILE_DIM
-  // auto csDeltaDtildeChunk = torch::zeros({batchSize, numHeads, QTILE_DIM},
-  //                                        matQ.options()); //
-  //                                        cumsum(deltaDtilde)
+  auto csDeltaDTildeVec = torch::zeros({batchSize, numHeads, seqLen},
+                                       matQ.options()); // cumsum(deltaDtilde)
+  const uint gridDimY = 2;
+  auto csDeltaDTildeChunkArr =
+      torch::ones({batchSize, numHeads, gridDimY, QTILE_DIM},
+                  matQ.options()); // cumsum(deltaDtilde)
 
   // only for debugging: C or D matrix (S x S) (will be removed later)
   auto matC =
@@ -198,6 +201,9 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
                   fGatePreact.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(vecN.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(vecM.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(
+                  csDeltaDTildeChunkArr.data_ptr<float>()),
+              reinterpret_cast<float *>(csDeltaDTildeVec.data_ptr<float>()),
               batchSize, numHeads, seqLen, dimHeads);
         } else if (std::is_same<scalar_t, at::Half>::value) {
           printf("before kernel dispatch - float16!\n");
@@ -215,8 +221,11 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
               reinterpret_cast<__half *>(iGatePreact.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(fGatePreact.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(vecN.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(vecM.data_ptr<scalar_t>()), batchSize,
-              numHeads, seqLen, dimHeads);
+              reinterpret_cast<__half *>(vecM.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(
+                  csDeltaDTildeChunkArr.data_ptr<float>()),
+              reinterpret_cast<float *>(csDeltaDTildeVec.data_ptr<float>()),
+              batchSize, numHeads, seqLen, dimHeads);
         } else if (std::is_same<scalar_t, float>::value) {
           printf("before kernel dispatch - float32!\n");
           kernel_dispatchers::vlstm_bw_dispatch<float>(
@@ -233,15 +242,19 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
               reinterpret_cast<float *>(iGatePreact.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(fGatePreact.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(vecN.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(vecM.data_ptr<scalar_t>()), batchSize,
-              numHeads, seqLen, dimHeads);
+              reinterpret_cast<float *>(vecM.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(
+                  csDeltaDTildeChunkArr.data_ptr<float>()),
+              reinterpret_cast<float *>(csDeltaDTildeVec.data_ptr<float>()),
+              batchSize, numHeads, seqLen, dimHeads);
         } else {
           printf("No kernel for this dtype available.\n");
         }
       }));
 
   return std::make_tuple(deltaQ, deltaK, deltaV, deltaIGatePreact,
-                         deltaFGatePreact, matC);
+                         deltaFGatePreact, matC, csDeltaDTildeChunkArr,
+                         csDeltaDTildeVec);
 }
 
 } // namespace vlstm

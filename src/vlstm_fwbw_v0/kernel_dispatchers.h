@@ -20,6 +20,7 @@ void vlstm_bw_dispatch(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                        scalar_t *matC, scalar_t *deltaH, scalar_t *matQ,
                        scalar_t *matK, scalar_t *matV, scalar_t *iGatePreact,
                        scalar_t *fGatePreact, scalar_t *vecN, scalar_t *vecM,
+                       float *csDeltaDTildeChunkArr, float *csDeltaDTildeVec,
                        int batchSize, int numHeads, int seqLen, int dimHeads);
 
 } // namespace kernel_dispatchers

@@ -1184,9 +1184,9 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       // loops over rows (outer) and columns (inner) of kTile and vTile
       const uint dKdVWarpTileYEnd = CEIL_DIV(KVtileDim, blockDim.y); // rows
       const uint dKdVWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);  // cols
-      for (uint dKdVWarpTileYIdx = 0; dKdVWarpTileYIdx < kvWarpTileYEnd;
+      for (uint dKdVWarpTileYIdx = 0; dKdVWarpTileYIdx < dKdVWarpTileYEnd;
            ++dKdVWarpTileYIdx) {
-        for (uint dKdVWarpTileXIdx = 0; dKdVWarpTileXIdx < kvWarpTileXEnd;
+        for (uint dKdVWarpTileXIdx = 0; dKdVWarpTileXIdx < dKdVWarpTileXEnd;
              ++dKdVWarpTileXIdx) {
           //? dKdVWarpTileIdxes for k-tile AND v-tile
           //* shared memory:
@@ -1263,7 +1263,8 @@ void kernel_dispatchers::vlstm_bw_dispatch(
     scalar_t *deltaIGatePreact, scalar_t *deltaFGatePreact, scalar_t *matC,
     scalar_t *deltaH, scalar_t *matQ, scalar_t *matK, scalar_t *matV,
     scalar_t *iGatePreact, scalar_t *fGatePreact, scalar_t *vecN,
-    scalar_t *vecM, int batchSize, int numHeads, int seqLen, int dimHeads) {
+    scalar_t *vecM, float *csDeltaDTildeChunkArr, float *csDeltaDTildeVec,
+    int batchSize, int numHeads, int seqLen, int dimHeads) {
   printf("B: %d, NH: %d, S: %d, DH: %d\n", batchSize, numHeads, seqLen,
          dimHeads);
   const int TblockDim = TBLOCK_DIM; // matmul blockdim
@@ -1333,26 +1334,32 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
-  //? Allocate intermediate global memory for cumsum(deltaDtildeTile) along
-  // KVdim
-  //* csDeltaDTildeChunkArr: Used for sync within all y-dim TBs
-  uint csDeltaDTildeChunkArrGlobalMemSize =
-      sizeof(float) * batchSize * numHeads * QtileDim * gridDimY;
-  float *csDeltaDTildeChunkArr;
-  gpuErrchk(cudaMalloc((void **)&csDeltaDTildeChunkArr,
-                       csDeltaDTildeChunkArrGlobalMemSize));
+  // TODO bring this back later. For debugging purposes, we need to allocate
+  // memory in torch
+  //   //? Allocate intermediate global memory for cumsum(deltaDtildeTile) along
+  //   // KVdim
+  //   //* csDeltaDTildeChunkArr: Used for sync within all y-dim TBs
+  //   uint csDeltaDTildeChunkArrGlobalMemSize =
+  //       sizeof(float) * batchSize * numHeads * QtileDim * gridDimY;
+  //   float *csDeltaDTildeChunkArr;
+  //   gpuErrchk(cudaMalloc((void **)&csDeltaDTildeChunkArr,
+  //                        csDeltaDTildeChunkArrGlobalMemSize));
 
-  //* csDeltaDTildeVec: Used to store previous computations over j-iterations
-  // (iterations over the gridDimY)
-  uint csDeltaDTildeVecGlobalMemSize =
-      sizeof(float) * batchSize * numHeads * seqLen;
-  float *csDeltaDTildeVec;
-  gpuErrchk(
-      cudaMalloc((void **)&csDeltaDTildeVec, csDeltaDTildeVecGlobalMemSize));
-  // init the memory to zero
-  // cudaMemset only works with integers, but float 0.0 has 0000 0000 in binary,
-  // so it should work
-  gpuErrchk(cudaMemset(csDeltaDTildeVec, 0, csDeltaDTildeVecGlobalMemSize));
+  //   //* csDeltaDTildeVec: Used to store previous computations over
+  //   j-iterations
+  //   // (iterations over the gridDimY)
+  //   uint csDeltaDTildeVecGlobalMemSize =
+  //       sizeof(float) * batchSize * numHeads * seqLen;
+  //   float *csDeltaDTildeVec;
+  //   gpuErrchk(
+  //       cudaMalloc((void **)&csDeltaDTildeVec,
+  //       csDeltaDTildeVecGlobalMemSize));
+  //   // init the memory to zero
+  //   // cudaMemset only works with integers, but float 0.0 has 0000 0000 in
+  //   binary,
+  //   // so it should work
+  //   gpuErrchk(cudaMemset(csDeltaDTildeVec, 0,
+  //   csDeltaDTildeVecGlobalMemSize));
 
   auto kernel = kernels::vlstm_bw<scalar_t, TblockDim, QtileDim, KVtileDim>;
   cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout,
@@ -1388,8 +1395,8 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   gpuErrchk(cudaPeekAtLastError());
 
   // free the allocated memory
-  gpuErrchk(cudaFree(csDeltaDTildeChunkArr));
-  gpuErrchk(cudaFree(csDeltaDTildeVec));
+  //   gpuErrchk(cudaFree(csDeltaDTildeChunkArr));
+  //   gpuErrchk(cudaFree(csDeltaDTildeVec));
 
   cudaStreamSynchronize(stream);
   cudaStreamDestroy(stream);
@@ -1406,17 +1413,20 @@ template void kernel_dispatchers::vlstm_bw_dispatch<__nv_bfloat16>(
     __nv_bfloat16 *matC, __nv_bfloat16 *deltaH, __nv_bfloat16 *matQ,
     __nv_bfloat16 *matK, __nv_bfloat16 *matV, __nv_bfloat16 *iGatePreact,
     __nv_bfloat16 *fGatePreact, __nv_bfloat16 *vecN, __nv_bfloat16 *vecM,
-    int batchSize, int numHeads, int seqLen, int dimHeads);
+    float *csDeltaDTildeChunkArr, float *csDeltaDTildeVec, int batchSize,
+    int numHeads, int seqLen, int dimHeads);
 template void kernel_dispatchers::vlstm_bw_dispatch<__half>(
     __half *deltaQ, __half *deltaK, __half *deltaV, __half *deltaIGatePreact,
     __half *deltaFGatePreact, __half *matC, __half *deltaH, __half *matQ,
     __half *matK, __half *matV, __half *iGatePreact, __half *fGatePreact,
-    __half *vecN, __half *vecM, int batchSize, int numHeads, int seqLen,
+    __half *vecN, __half *vecM, float *csDeltaDTildeChunkArr,
+    float *csDeltaDTildeVec, int batchSize, int numHeads, int seqLen,
     int dimHeads);
 template void kernel_dispatchers::vlstm_bw_dispatch<float>(
     float *deltaQ, float *deltaK, float *deltaV, float *deltaIGatePreact,
     float *deltaFGatePreact, float *matC, float *deltaH, float *matQ,
     float *matK, float *matV, float *iGatePreact, float *fGatePreact,
-    float *vecN, float *vecM, int batchSize, int numHeads, int seqLen,
+    float *vecN, float *vecM, float *csDeltaDTildeChunkArr,
+    float *csDeltaDTildeVec, int batchSize, int numHeads, int seqLen,
     int dimHeads);
 } // namespace vlstm
