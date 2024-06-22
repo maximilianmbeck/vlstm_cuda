@@ -74,7 +74,9 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
 // #define DEBUG_IJIDX 1
 
-#define DEBUG_DeltaDCS0 1
+// #define DEBUG_DeltaDCS0 1
+// #define DEBUG_DeltaDCS1 1
+// #define DEBUG_DeltaDCS2 1
 
 /**
 Conventions:
@@ -884,7 +886,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                   deltaDcsChunkArrGridXYGlobalMemIdx +
                   csDTileYdimThreadSharedMemIdx;
               csDeltaDTildeChunkArr[deltaDcsChunkArrThreadGlobalMemIdx] = acc;
-              // TODO look at acc value here
             }
           }
         }
@@ -905,6 +906,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               blockDim.x * blockDim.y * csDtileYdimThreadSharedMemIdx;
 
           if (csDTileYdimThreadSharedMemIdx < QtileDim) {
+            // global memory index for the cumsum correction
             const uint csDeltaDTildeVecThreadGlobalMemIdx =
                 nmfChunkBlockGlobalMemIdx + csDTileYdimThreadSharedMemIdx;
             // load the global cumsum correction from HBM
@@ -923,7 +925,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                   csDeltaDTildeChunkArr[deltaDcsChunkArrThreadGlobalMemIdx]);
 
 #ifdef DEBUG_DeltaDCS0
-              if ((blockIdx.x == 0) && (blockIdx.y <= 1) && (jIdx == 1) &&
+              if ((blockIdx.x == 0) && (blockIdx.y == 1) && (iIdx <= jIdx) &&
                   (flatThreadIdx <= 8)) {
                 printf("blockIdx(x,y)=(%d,%d), FTIdx=%d, ijIdx(i,j)=(%d,%d), "
                        "sTileXYIdx(x,y)=(%d,%d), csDYdimSMIdx=%d, bIdxY=%d, "
@@ -953,7 +955,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
 
-        //* 3) Add cumsum correction to local cumsum in DcsTile
+        //* 3a) Add cumsum correction to local cumsum in DcsTile
+        //* 3b) Store the cumsum result of the last col of the TB closest to
+        //*     the main diagonal (but not at the main diagonal!) in
+        //*     deltaDcsLoopHBM
         // outer loop: in j-direction (qTileDim / y-dim) with flattened threads
         // inner loop: in i-direction (kvTileDim / x-dim) per thread
         for (uint csDtileYdimThreadSharedMemIdx = 0;
@@ -977,9 +982,13 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             scalar_t total_cumsum_corr =
                 SMEMVECTOR(mDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx);
 
+            bool reachedMainDiagonal = false;
+            scalar_t dcs_corr_val = dscalar_zero<scalar_t>();
+
             for (uint csDTileXdimThreadSharedMemIdx = 0;
                  csDTileXdimThreadSharedMemIdx < KVtileDim;
                  ++csDTileXdimThreadSharedMemIdx) {
+
               //* csDtile global index (x-dim / KVtiledim) (virtual, as never
               // materialized fully)
               const uint csDTileXdimThreadIdx =
@@ -988,24 +997,41 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               if (csDTileYdimThreadIdx > csDTileXdimThreadIdx) {
                 // below main diagonal
                 // load&update the cumsum(Dtilde) val
-                scalar_t dcs_corr_val = SMEMARRAY(
-                    dCDcsTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
-                    csDTileXdimThreadSharedMemIdx);
+                dcs_corr_val = SMEMARRAY(dCDcsTile, KVtileDim,
+                                         csDTileYdimThreadSharedMemIdx,
+                                         csDTileXdimThreadSharedMemIdx);
 
                 dcs_corr_val = add_g(dcs_corr_val, total_cumsum_corr);
 
                 // store the updated cumsum(Dtilde) val
                 SMEMARRAY(dCDcsTile, KVtileDim, csDTileYdimThreadSharedMemIdx,
                           csDTileXdimThreadSharedMemIdx) = dcs_corr_val;
+              } else {
+                reachedMainDiagonal = true;
+                break;
               }
+            }
+#ifdef DEBUG_DeltaDCS2
+            if ((blockIdx.x == 0) && (blockIdx.y == gridDim.y - 1) &&
+                (iIdx >= jIdx) && (flatThreadIdx <= 8)) {
+              printf("blockIdx(x,y)=(%d,%d), FTIdx=%d, ijIdx(i,j)=(%d,%d), "
+                     "sTileXYIdx(x,y)=(%d,%d), csDYdimGBIdx=%d, "
+                     "dcs_cv=%f, reachedMD=%d\n",
+                     blockIdx.x, blockIdx.y, flatThreadIdx, iIdx, jIdx,
+                     sTileXdimBlockYIdx, sTileYdimBlockYIdx,
+                     csDTileYdimThreadIdx, type2float(dcs_corr_val),
+                     reachedMainDiagonal);
+            }
+#endif
+            if ((!reachedMainDiagonal) && (iIdx >= jIdx) &&
+                (blockIdx.y == gridDim.y - 1)) {
+              // onle the thread block closest to the main diagonal
+              // but not at the main diagonal should write to global memory
+              csDeltaDTildeVec[csDeltaDTildeVecThreadGlobalMemIdx] =
+                  type2float(dcs_corr_val);
             }
           }
         }
-
-        //* 4) Store the cumsum result of the last col of the TB closest to
-        // the
-        // main diagonal (but not at the main diagonal!) in deltaDcsLoopHBM
-        // TODO
 
 #ifdef OUTPUTDcsTile
         //! DEBUG: write cumsum(Dtilde) Tile to global memory
