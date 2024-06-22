@@ -139,12 +139,14 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
   // nChunk (QTileDim x 1)
   scalar_t *nChunk =
       (scalar_t *)&deltaHTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
-  // mChunk (QTileDim x 1)
-  scalar_t *mChunk = (scalar_t *)&nChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  // mDeltaDcsCorrChunk (QTileDim x 1)
+  scalar_t *mDeltaDcsCorrChunk =
+      (scalar_t *)&nChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
 
   //* (KVtileDim x dimHeads) tiles:
   // kTile (KVtileDim x dimHeads)
-  scalar_t *kTile = (scalar_t *)&mChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
+  scalar_t *kTile =
+      (scalar_t *)&mDeltaDcsCorrChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
   // vTile (KVtileDim x dimHeads)
   scalar_t *vTile =
       (scalar_t *)&kTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
@@ -355,7 +357,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         const uint qdHdQTileBlockGlobalMemIdx =
             batchHeadGridXGlobalMemIdxQKVdH + (dimHeads * QtileDim) * qTileIdx;
 
-        //* nChunk, mChunk, fChunk Global Memory Index
+        //* nChunk, mDeltaDcsCorrChunk, fChunk Global Memory Index
         const uint nmfChunkBlockGlobalMemIdx =
             batchHeadGridXGlobalMemIdxIFNMgate + (1 * QtileDim) * qTileIdx;
 
@@ -372,7 +374,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
 #endif
 
-        //! Load nChunk, mChunk, fChunk in SRAM
+        //! Load nChunk, mDeltaDcsCorrChunk, fChunk in SRAM
         const uint nmfChunkEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
         for (uint nmfChunkIdx = 0; nmfChunkIdx < nmfChunkEnd; ++nmfChunkIdx) {
           //? nmf idxes
@@ -386,7 +388,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           if (nmfThreadSharedMemIdx < QtileDim) {
             SMEMVECTOR(nChunk, nmfThreadSharedMemIdx) =
                 vecN[nmfThreadGlobalMemIdx];
-            SMEMVECTOR(mChunk, nmfThreadSharedMemIdx) =
+            SMEMVECTOR(mDeltaDcsCorrChunk, nmfThreadSharedMemIdx) =
                 vecM[nmfThreadGlobalMemIdx];
             // TODO if deltaF is computed we need the raw preactivations
             SMEMVECTOR(fChunk, nmfThreadSharedMemIdx) =
@@ -616,7 +618,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                     SMEMARRAY(dDTile, KVtileDim, dTileYdimThreadSharedMemIdx,
                               dTileXdimThreadSharedMemIdx);
                 scalar_t m_val =
-                    SMEMVECTOR(mChunk, dTileYdimThreadSharedMemIdx);
+                    SMEMVECTOR(mDeltaDcsCorrChunk, dTileYdimThreadSharedMemIdx);
 
                 if (dTileYdimThreadIdx == dTileXdimThreadIdx) {
                   d_val = exp_g(sub_g(i_val, m_val));
@@ -891,7 +893,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
         //* 2) Build the cumsum correction per TB: deltaDcsLoopHBM +
         // sum(deltaDcsIterHBM[<blockIdx.y])
-        // store the result in fAccRowChunk in SRAM
+        // store the result in mDeltaDcsCorrChunk in SRAM
         // loop in i-direction (qTileDim / y-dim) with flattened threads
         for (uint csDtileYdimThreadSharedMemIdx = 0;
              csDtileYdimThreadSharedMemIdx < csDTileYdimEnd;
@@ -906,7 +908,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             const uint csDeltaDTildeVecThreadGlobalMemIdx =
                 nmfChunkBlockGlobalMemIdx + csDTileYdimThreadSharedMemIdx;
             // load the global cumsum correction from HBM
-            // and init the total cumusum correction in fAccRowChunk
+            // and init the total cumusum correction in mDeltaDcsCorrChunk
             float total_cumsum_corr =
                 csDeltaDTildeVec[csDeltaDTildeVecThreadGlobalMemIdx];
 
@@ -933,14 +935,9 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               }
 #endif
             }
-            // store the total cumsum correction in fAccRowChunk
-            // TODO from here, when I uncomment this the first tile col gets
-            // wrong
-            // -> probably the shared memory space is somehow overriden????
-            //! ERROR!!!!!!!
-            // SMEMVECTOR(fAccRowChunk, csDTileYdimThreadSharedMemIdx)
-            // =
-            //     total_cumsum_corr;
+            // store the total cumsum correction in mDeltaDcsCorrChunk
+            SMEMVECTOR(mDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx) =
+                float2type<scalar_t>(total_cumsum_corr);
 
 #ifdef DEBUG_DeltaDCS1
             if ((blockIdx.x == 0) && (blockIdx.y <= 1) && (jIdx == 0) &&
@@ -956,7 +953,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
 
-#ifdef xx
         //* 3) Add cumsum correction to local cumsum in DcsTile
         // outer loop: in j-direction (qTileDim / y-dim) with flattened threads
         // inner loop: in i-direction (kvTileDim / x-dim) per thread
@@ -978,8 +974,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 nmfChunkBlockGlobalMemIdx + csDTileYdimThreadSharedMemIdx;
 
             // load the total cumsum correction from SRAM
-            scalar_t total_cumsum_corr = float2type<scalar_t>(
-                SMEMVECTOR(fAccRowChunk, csDTileYdimThreadSharedMemIdx));
+            scalar_t total_cumsum_corr =
+                SMEMVECTOR(mDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx);
 
             for (uint csDTileXdimThreadSharedMemIdx = 0;
                  csDTileXdimThreadSharedMemIdx < KVtileDim;
@@ -1005,7 +1001,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             }
           }
         }
-#endif
+
         //* 4) Store the cumsum result of the last col of the TB closest to
         // the
         // main diagonal (but not at the main diagonal!) in deltaDcsLoopHBM
@@ -1188,7 +1184,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
         __syncthreads();
 
-        //! Atomic add deltaQTile to deltaQ in HBM (HOW TO DO??)
+        //! Atomic add deltaQTile to deltaQ in HBM
         // We sum up the deltaQTiles in the different thread blocks in the
         // global memory loops over rows (outer) and columns (inner) of
         // deltaQTile
