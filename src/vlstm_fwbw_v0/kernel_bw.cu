@@ -184,7 +184,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       (scalar_t *)&dDTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
 
   //* (KVtileDim x 1) chunks:
-  float *fRowDeltaDcsCorrChunk =
+  float *fAccRowChunk =
       (float *)(&(dCDcsTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)]));
 
   //? flatten the threads to 1D
@@ -265,7 +265,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       const uint iChunkBlockGlobalMemIdx =
           iChunkGridXYGlobalMemIdx + (1 * KVtileDim) * blockIdx.y;
 
-      //! Load iChunk, Init deltaIChunk, deltaFChunk & fRowDeltaDcsCorrChunk to
+      //! Load iChunk, Init deltaIChunk, deltaFChunk & fAccRowChunk to
       //! zero in SRAM
       const uint idFdIChunkEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
       for (uint idFdIChunkIdx = 0; idFdIChunkIdx < idFdIChunkEnd;
@@ -285,7 +285,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               dscalar_zero<scalar_t>();
           SMEMVECTOR(deltaFChunk, idFdIThreadSharedMemIdx) =
               dscalar_zero<scalar_t>();
-          SMEMVECTOR(fRowDeltaDcsCorrChunk, idFdIThreadSharedMemIdx) = 0.0f;
+          SMEMVECTOR(fAccRowChunk, idFdIThreadSharedMemIdx) = 0.0f;
         }
       }
       __syncthreads();
@@ -559,7 +559,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! compute deltaDtildeTile = deltaDTile * D'Tile
         // flatten all threads to 1D along kvTileDim (j-direction),
         // sum up the f gate values in i-direction (qTileDim),
-        // store the last row of the D'Tile in fRowDeltaDcsCorrChunk
+        // store the last row of the D'Tile in fAccRowChunk
         // take care of causality
 
         // loop in j-direction (kvTileDim / x-dim)
@@ -581,8 +581,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 SMEMVECTOR(iChunk, dTileXdimThreadSharedMemIdx);
 
             // sum up f gate values in i-direction
-            float f_acc =
-                SMEMVECTOR(fRowDeltaDcsCorrChunk, dTileXdimThreadSharedMemIdx);
+            float f_acc = SMEMVECTOR(fAccRowChunk, dTileXdimThreadSharedMemIdx);
             // loop in j-direction (qTileDim / y-dim)
             for (uint dTileYdimThreadSharedMemIdx = 0;
                  dTileYdimThreadSharedMemIdx < QtileDim;
@@ -600,10 +599,9 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                     SMEMVECTOR(fChunk, dTileYdimThreadSharedMemIdx);
                 f_acc = add_g(f_acc, type2float(f_val));
               }
-              // store the last row of D'Tile in fRowDeltaDcsCorrChunk
+              // store the last row of D'Tile in fAccRowChunk
               if (dTileYdimThreadSharedMemIdx == QtileDim - 1) {
-                SMEMVECTOR(fRowDeltaDcsCorrChunk, dTileXdimThreadSharedMemIdx) =
-                    f_acc;
+                SMEMVECTOR(fAccRowChunk, dTileXdimThreadSharedMemIdx) = f_acc;
               }
 
               //? Create D'Tile entries sum(f) + i
@@ -893,7 +891,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
         //* 2) Build the cumsum correction per TB: deltaDcsLoopHBM +
         // sum(deltaDcsIterHBM[<blockIdx.y])
-        // store the result in fRowDeltaDcsCorrChunk in SRAM
+        // store the result in fAccRowChunk in SRAM
         // loop in i-direction (qTileDim / y-dim) with flattened threads
         for (uint csDtileYdimThreadSharedMemIdx = 0;
              csDtileYdimThreadSharedMemIdx < csDTileYdimEnd;
@@ -908,7 +906,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             const uint csDeltaDTildeVecThreadGlobalMemIdx =
                 nmfChunkBlockGlobalMemIdx + csDTileYdimThreadSharedMemIdx;
             // load the global cumsum correction from HBM
-            // and init the total cumusum correction in fRowDeltaDcsCorrChunk
+            // and init the total cumusum correction in fAccRowChunk
             float total_cumsum_corr =
                 csDeltaDTildeVec[csDeltaDTildeVecThreadGlobalMemIdx];
 
@@ -935,12 +933,12 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               }
 #endif
             }
-            // store the total cumsum correction in fRowDeltaDcsCorrChunk
+            // store the total cumsum correction in fAccRowChunk
             // TODO from here, when I uncomment this the first tile col gets
             // wrong
             // -> probably the shared memory space is somehow overriden????
             //! ERROR!!!!!!!
-            // SMEMVECTOR(fRowDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx)
+            // SMEMVECTOR(fAccRowChunk, csDTileYdimThreadSharedMemIdx)
             // =
             //     total_cumsum_corr;
 
@@ -980,8 +978,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 nmfChunkBlockGlobalMemIdx + csDTileYdimThreadSharedMemIdx;
 
             // load the total cumsum correction from SRAM
-            scalar_t total_cumsum_corr = float2type<scalar_t>(SMEMVECTOR(
-                fRowDeltaDcsCorrChunk, csDTileYdimThreadSharedMemIdx));
+            scalar_t total_cumsum_corr = float2type<scalar_t>(
+                SMEMVECTOR(fAccRowChunk, csDTileYdimThreadSharedMemIdx));
 
             for (uint csDTileXdimThreadSharedMemIdx = 0;
                  csDTileXdimThreadSharedMemIdx < KVtileDim;
@@ -1458,11 +1456,9 @@ void kernel_dispatchers::vlstm_bw_dispatch(
       sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
 
   // we keep these as float as it acts as accumulator
-  // we set it to QtileDim since (KVtileDim <= QtileDim)
-  // we use it to store the cumsum correction of deltaDtildeTile
-  // and the fTileRow during D' computation
+  // for the fTileRow during D' computation
   const uint fTileRowSharedMemSize =
-      sizeof(float) * QtileDim * (1 + SHARED_MEM_PADDING);
+      sizeof(float) * KVtileDim * (1 + SHARED_MEM_PADDING);
 
   const uint sharedMemorySize =
       3 * qdQdHTileSharedMemSize + 4 * kvdKdVTileSharedMemSize +
