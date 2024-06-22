@@ -1370,6 +1370,12 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           deltaV[kvWarpTileThreadGlobalMemIdx] =
               SMEMARRAY(deltaVTile, dimHeads, dKdVWarpTileThreadSharedMemYIdx,
                         dKdVWarpTileThreadSharedMemXIdx);
+
+          // clear SRAM for next iteration
+          SMEMARRAY(deltaKTile, dimHeads, dKdVWarpTileThreadSharedMemYIdx,
+                    dKdVWarpTileThreadSharedMemXIdx) = dscalar_zero<scalar_t>();
+          SMEMARRAY(deltaVTile, dimHeads, dKdVWarpTileThreadSharedMemYIdx,
+                    dKdVWarpTileThreadSharedMemXIdx) = dscalar_zero<scalar_t>();
         }
       }
       __syncthreads();
