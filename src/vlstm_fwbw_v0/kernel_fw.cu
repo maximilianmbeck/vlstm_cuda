@@ -405,7 +405,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           // in the dTile
           gridGroup.sync();
           // load fTileColLast from previous iteration and add to f_acc
-          float fTileColLastVal = SMEMVECTOR(fTileColLast, 0);
+          float fTileColLastVal =
+              fTileColLastHBM[batchHeadGridXGlobalMemIdxFtileColLast];
 
           // loop chunkwise over the fGatePreacts up to the current qTile
           // position
@@ -524,16 +525,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                       fChunkEnd, fWarpChunkIdx, f_acc, fTileColLastVal);
                 }
 #endif
-
-                //                 // save last f_acc in fTileColLast for next
-                //                 qTileIdx
-                //                 // only the last block needs to save the last
-                //                 f_acc if ((fThreadSharedMemYIdx == QtileDim -
-                //                 1) &&
-                //                     (fChunkAccIterIdx == fChunkAccIterEnd -
-                //                     1)) {
-                //                   SMEMVECTOR(fTileColLast, 0) = fTileCol_val;
-                //                 }
               }
             } // end for fWarpChunkIdx loop (accumulator)
             __syncthreads();
@@ -552,10 +543,13 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               fTileCol_val = add_g(fTileCol_val, fTileColLastVal);
               SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = fTileCol_val;
 
-              if (fThreadSharedMemYIdx == QtileDim - 1) {
-                SMEMVECTOR(fTileColLast, 0) = fTileCol_val;
+              if ((fThreadSharedMemYIdx == QtileDim - 1) &&
+                  blockIdx.y == gridDim.y - 1) {
+                // SMEMVECTOR(fTileColLast, 0) = fTileCol_val;
+                fTileColLastHBM[batchHeadGridXGlobalMemIdxFtileColLast] =
+                    fTileCol_val;
 #ifdef DEBUG_fcolval1
-                if ((blockIdx.x == 0) && (blockIdx.y == 0)) {
+                if ((blockIdx.x == 0) && (blockIdx.y <= 1)) {
                   printf("STR: BIdx.y=%d: qTileIdx=%d, fWCIdx=%d (<%d), "
                          "flatThreadIdx=%d: fT_acc_res=%f, fTileCol_val=%f, "
                          "fTileColLastVal=%f\n",
@@ -569,14 +563,13 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
             } // end if fThreadSharedMemYIdx < QtileDim
           }   // end for fWarpChunkIdx loop (addition)
+        }     // end if kvTileIdx == 0
 
-          // todo sync grid?
-        } // end if kvTileIdx == 0
-          // else: do nothing
-          // we are within the sequence at position > kvTileDim * kvTileIdx
-          // we can just use the fTileCol from the previous iteration and keep
-          // subtracting we only need to update the fTileCol for the next
-          // kvTileIdx at the end of the current kvTileIdx iteration
+        // else: do nothing
+        // we are within the sequence at position > kvTileDim * kvTileIdx
+        // we can just use the fTileCol from the previous iteration and keep
+        // subtracting we only need to update the fTileCol for the next
+        // kvTileIdx at the end of the current kvTileIdx iteration
 
 #ifdef DEBUG8
         if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx == 0)) {
