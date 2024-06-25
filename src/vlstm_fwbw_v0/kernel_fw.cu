@@ -32,8 +32,8 @@ template <typename scalar_t, int TblockDim, int QblockDim, int KVblockDim>
 __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                          scalar_t *matC, scalar_t *matQ, scalar_t *matK,
                          scalar_t *matV, scalar_t *iGatePreact,
-                         scalar_t *fGatePreact, int batchSize, int numHeads,
-                         int seqLen, int dimHeads);
+                         scalar_t *fGatePreact, float *fTileColLast,
+                         int batchSize, int numHeads, int seqLen, int dimHeads);
 
 } // namespace kernels
 
@@ -68,6 +68,11 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG11 1
 // #define DEBUG12 1
 
+// #define DEBUG_fcolval1 1
+#define DEBUG_fcolval2 1
+
+#define OUTPUT_matD 1
+
 /**
 Conventions:
 - chunk: A 1D vector in shared memory
@@ -81,7 +86,8 @@ __global__ void
 kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   scalar_t *matC, scalar_t *matQ, scalar_t *matK,
                   scalar_t *matV, scalar_t *iGatePreact, scalar_t *fGatePreact,
-                  int batchSize, int numHeads, int seqLen, int dimHeads) {
+                  float *fTileColLast, int batchSize, int numHeads, int seqLen,
+                  int dimHeads) {
   // int tIdx = threadIdx.x + blockDim.x * threadIdx.y;
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
@@ -166,15 +172,11 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
   scalar_t *nPrevChunk =
       (scalar_t *)&nChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
 
-  // init fTileColLast (1 x 1) in shared memory for forget gate (last row value
-  // of fTileCol)
-  float *fTileColLast =
-      (float *)&lPrevChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
-
   //! PARALLELIZE ALONG BATCHSIZE * NUMHEADS (gridDim.x)
   const uint batchHeadStepQKV = seqLen * dimHeads;
   const uint batchHeadStepIFgateNMchunk = seqLen * 1;
   const uint batchHeadStepCD = seqLen * seqLen;
+  const uint batchHeadStepFtileColLast = 1;
   const uint numBatchHeads = batchSize * numHeads;
   // End for looplevel 0:
   const uint batchHeadEnd = CEIL_DIV(numBatchHeads, gridDim.x);
@@ -193,6 +195,10 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         (batchHeadStepCD * gridDim.x) * batchHeadIdx +
         (batchHeadStepCD)*blockIdx.x;
 
+    uint batchHeadGridXGlobalMemIdxFtileColLast =
+        (batchHeadStepFtileColLast * gridDim.x) * batchHeadIdx +
+        (batchHeadStepFtileColLast)*blockIdx.x;
+
 #ifdef DEBUG5
     if ((threadIdx.x == 0) && (threadIdx.y == 0)) {
       printf("B<%d,%d> batchHeadIdx: %d, batchHeadEnd: %d, "
@@ -202,8 +208,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
              batchHeadGridXGlobalMemIdxQKV);
     }
 #endif
-    SMEMVECTOR(fTileColLast, 0) =
-        float2type<float>(0.0f); // could also just write 0.0f
+    // SMEMVECTOR(fTileColLast, 0) =
+    //     float2type<float>(0.0f); // could also just write 0.0f
 
     //! PARALLELIZE ALONG SEQLEN (gridDim.y)
     // Ends for looplevel 1:
@@ -393,20 +399,26 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           // we compute the cumulative sum of the forget gates per row position
           // in the dTile
 
+          // load fTileColLast from previous iteration and add to f_acc
+          float fTileColLastVal =
+              fTileColLast[batchHeadGridXGlobalMemIdxFtileColLast];
+
           // loop chunkwise over the fGatePreacts up to the current qTile
           // position
           const uint fChunkEnd = gridDim.y * qTileIdx + blockIdx.y + 1;
-          // TODO optimize by setting the fChunkStartIdx properly
-          for (uint fChunkIdx = 0; fChunkIdx < fChunkEnd; ++fChunkIdx) {
-            // #ifdef DEBUG6
-            //             if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
-            //             (threadIdx.x == 0) &&
-            //                 (threadIdx.y == 0)) {
-            //               printf("qTileIdx=%d, fChunkIdx=%d: fChunkEnd:
-            //               %d\n", qTileIdx,
-            //                      fChunkIdx, fChunkEnd);
-            //             }
-            // #endif
+          const uint fChunkStart =
+              0; // TODO from here: How to set the start idx
+          for (uint fChunkIdx = fChunkStart; fChunkIdx < fChunkEnd;
+               ++fChunkIdx) {
+#ifdef DEBUG_fcolval2
+            if ((blockIdx.x == 0) && (blockIdx.y == 0) && flatThreadIdx == 0) {
+              printf("IDX: cTileBlockY=%d, qTileIdx=%d, fChunkIdx=%d (<%d), "
+                     "blockIdx.y=%d, "
+                     "flatThreadIdx=%d, kvTileIdx=%d\n",
+                     cTileBlockYIdx, qTileIdx, fChunkIdx, fChunkEnd, blockIdx.y,
+                     flatThreadIdx, kvTileIdx);
+            }
+#endif
             //? f idxes
             // load fChunk for fChunkIdx
             //* (grid&block) offset in f preactivations for fChunk (global
@@ -429,11 +441,11 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   fChunkBlockGlobalMemIdx + fThreadSharedMemYIdx;
 
               if (fThreadSharedMemYIdx < QtileDim) {
-                SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
-                    logsigmoid_g(fGatePreact[fThreadGlobalMemIdx]);
-                // without logsigmoid for debugging only:
                 // SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
-                //     fGatePreact[fThreadGlobalMemIdx];
+                //     logsigmoid_g(fGatePreact[fThreadGlobalMemIdx]);
+                // without logsigmoid for debugging only:
+                SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
+                    fGatePreact[fThreadGlobalMemIdx];
               }
               // #ifdef DEBUG7
               //               if ((blockIdx.x == 0) && (blockIdx.y == 1) &&
@@ -452,7 +464,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             }
             __syncthreads();
 
-            //! sum up fgates for dTile
+            //! Construct fTileCol (first column of D matrix in a tiled way) by
+            //! summing up the fgates
             // the very first forgetgate index must be f_2
             for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
                  ++fWarpChunkIdx) {
@@ -503,13 +516,25 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   }
 #endif
                 }
-                // if (fChunkIdx == 0) {
+                // SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
+                //     add_g(f_acc, fTileColLastVal);
                 SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = f_acc;
-                // } else {
-                //   SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
-                //       add_g(SMEMVECTOR(fTileCol, fThreadSharedMemYIdx),
-                //       f_acc);
-                // }
+
+                // save last f_acc in fTileColLast for next qTileIdx
+                // only the last block needs to save the last f_acc
+                if ((blockIdx.y == gridDim.y - 1) &&
+                    (fThreadSharedMemYIdx == QtileDim - 1)) {
+                  fTileColLast[batchHeadGridXGlobalMemIdxFtileColLast] = f_acc;
+#ifdef DEBUG_fcolval1
+                  if ((blockIdx.x == 0) && (blockIdx.y <= 1)) {
+                    printf("qTileIdx=%d, fChunkIdx=%d (<%d), blockIdx.y=%d, "
+                           "flatThreadIdx=%d: "
+                           "f_acc=%f, fTileColLastVal=%f\n",
+                           qTileIdx, fChunkIdx, fChunkEnd, blockIdx.y,
+                           flatThreadIdx, f_acc, fTileColLastVal);
+                  }
+#endif
+                }
               }
 #ifdef DEBUG6
               if ((blockIdx.x == 0) && (blockIdx.y <= 1) &&
@@ -533,8 +558,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         // subtracting we only need to update the fTileCol for the next
         // kvTileIdx at the end of the current kvTileIdx iteration
 
-        // only do this for lower triangular part of the d matrix
-        // TODO try this: cTileBlockXIdx <= cTileBlockYIdx
 #ifdef DEBUG8
         if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx == 0)) {
           printf("qTileIdx=%d, kvTileIdx=%d, cTileBlockXIdx=%d, "
@@ -565,11 +588,11 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           if (ifThreadSharedMemYIdx < KVtileDim) {
             SMEMVECTOR(iChunk, ifThreadSharedMemYIdx) =
                 iGatePreact[ifChunkThreadGlobalMemIdx];
-            SMEMVECTOR(fChunk, ifThreadSharedMemYIdx) =
-                logsigmoid_g(fGatePreact[ifChunkThreadGlobalMemIdx]);
+            // SMEMVECTOR(fChunk, ifThreadSharedMemYIdx) =
+            //     logsigmoid_g(fGatePreact[ifChunkThreadGlobalMemIdx]);
             // without logsigmoid for debugging only:
-            //   SMEMVECTOR(fChunk, ifThreadSharedMemYIdx) =
-            //       fGatePreact[ifChunkThreadGlobalMemIdx];
+            SMEMVECTOR(fChunk, ifThreadSharedMemYIdx) =
+                fGatePreact[ifChunkThreadGlobalMemIdx];
           }
         }
         __syncthreads();
@@ -621,9 +644,10 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                                            type2float(SMEMVECTOR(fChunk, i)));
               }
               // d_val;
-              // d_val = f_acc_subtractfrom; // f_gate only for debugging
-              d_val =
-                  add_g(f_acc_subtractfrom, type2float(SMEMVECTOR(iChunk, i)));
+              d_val = f_acc_subtractfrom; // f_gate only for debugging
+                                          //   d_val =
+              //       add_g(f_acc_subtractfrom, type2float(SMEMVECTOR(iChunk,
+              //       i)));
 
               // max state
               d_max = max_g(d_max, d_val);
@@ -651,6 +675,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
         __syncthreads();
 
+#ifdef OUTPUT_matD
         //! DEBUG only: write dTile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
         //* cdTile Global Memory Index (Debug only)
@@ -701,6 +726,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #endif
           }
         }
+#endif
+
         //! compute S = (Q x K^T)
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
         // loops over cTile rows (outer) and columns (inner)
@@ -1074,8 +1101,6 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // we keep these as float as it acts as accumulator
   const uint fTileColSharedMemSize =
       sizeof(float) * QtileDim * (1 + SHARED_MEM_PADDING);
-  const uint fTileColLastSharedMemSize =
-      sizeof(float) * 1 * (1 + SHARED_MEM_PADDING);
 
   const uint mChunkSharedMemSize =
       sizeof(scalar_t) * QtileDim * (1 + SHARED_MEM_PADDING);
@@ -1091,8 +1116,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(
       2 * qhTileSharedMemSize + 2 * kvTileSharedMemSize +
       2 * cdTileSharedMemSize + iChunkSharedMemSize + fChunkSharedMemSize +
       fTileColSharedMemSize + 2 * mChunkSharedMemSize +
-      2 * lChunkSharedMemSize + 2 * nChunkSharedMemSize +
-      fTileColLastSharedMemSize;
+      2 * lChunkSharedMemSize + 2 * nChunkSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
@@ -1101,6 +1125,12 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
+  //* allocate intermediate HBM memory for D matrix (forget gate preactivations)
+  const uint fTileColLastGlobalMemSize = sizeof(float) * batchSize * numHeads;
+  float *fTileColLast;
+  gpuErrchk(cudaMalloc((void **)&fTileColLast, fTileColLastGlobalMemSize));
+  gpuErrchk(cudaMemset(fTileColLast, 0, fTileColLastGlobalMemSize));
+
   auto kernel = kernels::vlstm_fw<scalar_t, TblockDim, QtileDim, KVtileDim>;
   cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout,
                        cudaSharedmemCarveoutMaxShared);
@@ -1108,11 +1138,11 @@ void kernel_dispatchers::vlstm_fw_dispatch(
                        sharedMemorySize);
   // define void* pointers to the kernel arguments
   void *kernelArgs[] = {
-      (void *)&matH,      (void *)&vecN,        (void *)&vecM,
-      (void *)&matC,      (void *)&matQ,        (void *)&matK,
-      (void *)&matV,      (void *)&iGatePreact, (void *)&fGatePreact,
-      (void *)&batchSize, (void *)&numHeads,    (void *)&seqLen,
-      (void *)&dimHeads};
+      (void *)&matH,         (void *)&vecN,        (void *)&vecM,
+      (void *)&matC,         (void *)&matQ,        (void *)&matK,
+      (void *)&matV,         (void *)&iGatePreact, (void *)&fGatePreact,
+      (void *)&fTileColLast, (void *)&batchSize,   (void *)&numHeads,
+      (void *)&seqLen,       (void *)&dimHeads};
 
   cudaLaunchCooperativeKernel((void *)kernel, gridDims, blockDims, kernelArgs,
                               sharedMemorySize, stream);
