@@ -392,12 +392,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 vecN[nmfThreadGlobalMemIdx];
             SMEMVECTOR(mDeltaDcsCorrChunk, nmfThreadSharedMemIdx) =
                 vecM[nmfThreadGlobalMemIdx];
-            // TODO if deltaF is computed we need the raw preactivations
+
+            // load raw preactivations for D matrix and deltaF
             SMEMVECTOR(fChunk, nmfThreadSharedMemIdx) =
-                logsigmoid_g(fGatePreact[nmfThreadGlobalMemIdx]);
-            // without logsigmoid for debugging only:
-            //   SMEMVECTOR(fChunk, nmfThreadSharedMemIdx) =
-            //       fGatePreact[nmfThreadGlobalMemIdx];
+                fGatePreact[nmfThreadGlobalMemIdx];
           }
         }
 
@@ -599,8 +597,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
               // only sum up the f gates in the lower triangular (take care of
               // causality)
               if (dTileYdimThreadIdx > dTileXdimThreadIdx) {
-                scalar_t f_val =
-                    SMEMVECTOR(fChunk, dTileYdimThreadSharedMemIdx);
+                scalar_t f_val = logsigmoid_g(
+                    SMEMVECTOR(fChunk, dTileYdimThreadSharedMemIdx));
                 f_acc = add_g(f_acc, type2float(f_val));
               }
               // store the last row of D'Tile in fAccRowChunk
