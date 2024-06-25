@@ -310,6 +310,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           // fTileCol
           //   SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
           //       SMEMVECTOR(fTileColLast, 0);
+          SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = 0.0f;
           // mPrevChunk
           SMEMVECTOR(mPrevChunk, fThreadSharedMemYIdx) =
               float2type<scalar_t>(-CUDART_INF_F);
@@ -402,7 +403,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           // we begin at seqLen position 0 in X direction
           // we compute the cumulative sum of the forget gates per row position
           // in the dTile
-
+          gridGroup.sync();
           // load fTileColLast from previous iteration and add to f_acc
           float fTileColLastVal = SMEMVECTOR(fTileColLast, 0);
 
@@ -411,8 +412,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           const uint fChunkEnd = gridDim.y * qTileIdx + blockIdx.y + 1;
           const uint fChunkStart = gridDim.y * qTileIdx;
           //   max(0, gridDim.y * (qTileIdx - 1) + blockIdx.y + 1);
-          for (uint fChunkIdx = fChunkStart; fChunkIdx < fChunkEnd;
-               ++fChunkIdx) {
+          const uint fChunkAccIterEnd = gridDim.y; // blockIdx.y + 1;
+          for (uint fChunkAccIterIdx = 0; fChunkAccIterIdx < fChunkAccIterEnd;
+               ++fChunkAccIterIdx) {
 #ifdef DEBUG_fcolval2
             if ((blockIdx.x == 0) && (blockIdx.y == 0) && flatThreadIdx == 0) {
               printf("IDX: cTileBlockY=%d, qTileIdx=%d, fChunkIdx=%d (<%d), "
@@ -430,9 +432,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             // memory)
             const uint fChunkGridXYGlobalMemIdx =
                 batchHeadGridXGlobalMemIdxIFgateNMchunk +
-                (1 * QtileDim) * fChunkIdx;
+                (1 * QtileDim) * gridDim.y * qTileIdx;
             const uint fChunkBlockGlobalMemIdx =
-                fChunkGridXYGlobalMemIdx; //+ (1 * QtileDim) * blockIdx.y;
+                fChunkGridXYGlobalMemIdx + (1 * QtileDim) * fChunkAccIterIdx;
 
             //! loading fChunk into shared memory with threadblocks
             for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
@@ -473,16 +475,17 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               float f_acc;
               if (fThreadSharedMemYIdx < QtileDim) {
                 // init forget gate accumulator
-                if (fChunkIdx == 0) {
+                if (fChunkAccIterIdx == 0) {
                   f_acc = 0.0f;
                 } else {
                   f_acc = SMEMVECTOR(fTileCol, fThreadSharedMemYIdx);
-                } // TODO from here: this is the problem we need to set f_acc to
-                  // 0 at first iteration, but we modify the start index
+                } // TODO from here (FIXED): this is the problem we need to set
+                  // f_acc to 0 at first iteration, but we modify the start
+                  // index
 
                 // start the sum at the second index (corresponds to f_2)
                 uint startIdx = 0;
-                if (fChunkIdx == 0) {
+                if ((qTileIdx == 0) && (fChunkAccIterIdx == 0)) {
                   startIdx = 1;
                 }
                 for (uint i = startIdx; i < QtileDim; ++i) {
@@ -490,7 +493,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   // fSumIdx corresponds to the current fGatePreact index
                   // (starting from 0) i.e. for f_2: fSumIdx = 1, for f_3:
                   // fSumIdx = 2, ...
-                  const uint fSumIdx = fChunkIdx * QtileDim + i;
+                  const uint fSumIdx = gridDim.y * qTileIdx * QtileDim +
+                                       fChunkAccIterIdx * QtileDim + i;
                   if (fSumIdx > dTileThreadYIdx) {
                     break;
                   }
@@ -508,47 +512,71 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   }
 #endif
                 }
-                float fTileCol_val = add_g(f_acc, fTileColLastVal);
-                // SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) =
-                //     add_g(f_acc, fTileColLastVal);
-                SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = fTileCol_val;
+                SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = f_acc;
 
 #ifdef DEBUG_fcolval3
-                if ((blockIdx.x == 0) && (blockIdx.y == 1) &&
+                if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
                     flatThreadIdx == 7) {
-                  printf("BIdx.y=%d, FLTIdx=%d: qTileIdx=%d, fChunkIdx=%d "
-                         "(<%d), fWCIdx=%d, f_acc=%f, fTileColLast=%f\n",
-                         blockIdx.y, flatThreadIdx, qTileIdx, fChunkIdx,
-                         fChunkEnd, fWarpChunkIdx, f_acc, fTileColLastVal);
+                  printf(
+                      "BIdx.y=%d, FLTIdx=%d: qTileIdx=%d, fChunkAccIterIdx=%d "
+                      "(<%d), fWCIdx=%d, f_acc=%f, fTileColLast=%f\n",
+                      blockIdx.y, flatThreadIdx, qTileIdx, fChunkAccIterIdx,
+                      fChunkEnd, fWarpChunkIdx, f_acc, fTileColLastVal);
                 }
 #endif
 
-                // save last f_acc in fTileColLast for next qTileIdx
-                // only the last block needs to save the last f_acc
-                if ((fThreadSharedMemYIdx == QtileDim - 1) &&
-                    (fChunkIdx == fChunkEnd - 1)) {
-                  SMEMVECTOR(fTileColLast, 0) = fTileCol_val;
-#ifdef DEBUG_fcolval1
-                  if ((blockIdx.x == 0) && (blockIdx.y == 1)) {
-                    printf("STR: BIdx.y=%d: qTileIdx=%d, fChunkIdx=%d (<%d) "
-                           "flatThreadIdx=%d: "
-                           "f_acc=%f\n",
-                           blockIdx.y, qTileIdx, fChunkIdx, fChunkEnd,
-                           flatThreadIdx, f_acc);
-                  }
-#endif
-                }
+                //                 // save last f_acc in fTileColLast for next
+                //                 qTileIdx
+                //                 // only the last block needs to save the last
+                //                 f_acc if ((fThreadSharedMemYIdx == QtileDim -
+                //                 1) &&
+                //                     (fChunkAccIterIdx == fChunkAccIterEnd -
+                //                     1)) {
+                //                   SMEMVECTOR(fTileColLast, 0) = fTileCol_val;
+                //                 }
               }
-            }
+            } // end for fWarpChunkIdx loop (accumulator)
             __syncthreads();
-          }
+          } // end for fChunkAccIterIdx loop
+
+          //! Add fTileColLast to fTileCol
+          for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
+               ++fWarpChunkIdx) {
+            //? f idxes
+            //* shared memory:
+            const uint fThreadSharedMemYIdx =
+                flatThreadIdx + blockDim.x * blockDim.y * fWarpChunkIdx;
+
+            if (fThreadSharedMemYIdx < QtileDim) {
+              float fTileCol_val = SMEMVECTOR(fTileCol, fThreadSharedMemYIdx);
+              fTileCol_val = add_g(fTileCol_val, fTileColLastVal);
+              SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = fTileCol_val;
+
+              if (fThreadSharedMemYIdx == QtileDim - 1) {
+                SMEMVECTOR(fTileColLast, 0) = fTileCol_val;
+#ifdef DEBUG_fcolval1
+                if ((blockIdx.x == 0) && (blockIdx.y == 0)) {
+                  printf("STR: BIdx.y=%d: qTileIdx=%d, fWCIdx=%d (<%d), "
+                         "flatThreadIdx=%d: fT_acc_res=%f, fTileCol_val=%f, "
+                         "fTileColLastVal=%f\n",
+                         blockIdx.y, qTileIdx, fWarpChunkIdx, fWarpChunkEnd,
+                         flatThreadIdx,
+                         SMEMVECTOR(fTileCol, fThreadSharedMemYIdx),
+                         fTileCol_val, fTileColLastVal);
+                }
+#endif
+              }
+
+            } // end if fThreadSharedMemYIdx < QtileDim
+          }   // end for fWarpChunkIdx loop (addition)
+
           // todo sync grid?
-        }
-        // else: do nothing
-        // we are within the sequence at position > kvTileDim * kvTileIdx
-        // we can just use the fTileCol from the previous iteration and keep
-        // subtracting we only need to update the fTileCol for the next
-        // kvTileIdx at the end of the current kvTileIdx iteration
+        } // end if kvTileIdx == 0
+          // else: do nothing
+          // we are within the sequence at position > kvTileDim * kvTileIdx
+          // we can just use the fTileCol from the previous iteration and keep
+          // subtracting we only need to update the fTileCol for the next
+          // kvTileIdx at the end of the current kvTileIdx iteration
 
 #ifdef DEBUG8
         if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx == 0)) {
@@ -650,8 +678,10 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #ifdef DEBUG9
               if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
                   (flatThreadIdx == 7)) {
-                printf("qTileIdx=%d, kvTileIdx=%d, cTileBlockXIdx=%d, "
-                       "cTileBlockYIdx=%d, dTileThreadXYIdx=(%d,%d), "
+                printf("qTileIdx=%d, kvTileIdx=%d, "
+                       "cTileBlockXIdx=%d, "
+                       "cTileBlockYIdx=%d, "
+                       "dTileThreadXYIdx=(%d,%d), "
                        "d_val=%f\n",
                        qTileIdx, kvTileIdx, cTileBlockXIdx, cTileBlockYIdx,
                        dTileThreadXIdx, dTileThreadYIdx, d_val);
@@ -762,13 +792,16 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                     (threadIdx.x == 0) && (threadIdx.y == 3) &&
                     (cWarpTileXIdx == 0) && (kvTileIdx == 0) &&
                     (i == dimHeads - 1)) {
-                  printf("qTIdx=%d|kvTIdx=%d: qTile[%d][%d] = %f\n", qTileIdx,
-                         kvTileIdx, cWarpTileThreadSharedMemYIdx, i,
+                  printf("qTIdx=%d|kvTIdx=%d: qTile[%d][%d] = "
+                         "%f\n",
+                         qTileIdx, kvTileIdx, cWarpTileThreadSharedMemYIdx, i,
                          type2float(qTile[cWarpTileThreadSharedMemYIdx][i]));
-                  printf("qTIdx=%d|kvTIdx=%d: kTile[%d][%d] = %f\n", qTileIdx,
-                         kvTileIdx, cWarpTileThreadSharedMemXIdx, i,
+                  printf("qTIdx=%d|kvTIdx=%d: kTile[%d][%d] = "
+                         "%f\n",
+                         qTileIdx, kvTileIdx, cWarpTileThreadSharedMemXIdx, i,
                          type2float(kTile[cWarpTileThreadSharedMemXIdx][i]));
-                  printf("qTIdx=%d|kvTIdx=%d: cTile[%d][%d](%d) = %f\n",
+                  printf("qTIdx=%d|kvTIdx=%d: "
+                         "cTile[%d][%d](%d) = %f\n",
                          qTileIdx, kvTileIdx, cWarpTileThreadSharedMemYIdx,
                          cWarpTileThreadSharedMemXIdx, i, type2float(qk_acc));
                 }
@@ -812,7 +845,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             for (uint i = 0; i < KVtileDim; ++i) {
               const uint cTileGlobalThreadXIdx = cTileBlockXIdx + i;
               if (cTileGlobalThreadXIdx > cTileGlobalThreadYIdx) {
-                // values above the main diagonal in D' are 0
+                // values above the main diagonal in D' are
+                // 0
                 SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) =
                     dscalar_zero<scalar_t>();
               } else {
@@ -821,8 +855,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 scalar_t d_val =
                     SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
 
-                // store c_tilde_val in dTile for now (later in cTile)
-                // for debugging only (since dTile is already written to
+                // store c_tilde_val in dTile for now (later
+                // in cTile) for debugging only (since dTile
+                // is already written to
                 //   global memory)
                 scalar_t c_tilde_val = mul_g(s_val, exp_g(sub_g(d_val, m_val)));
                 SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) =
@@ -1120,7 +1155,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
-  //* allocate intermediate HBM memory for D matrix (forget gate preactivations)
+  //* allocate intermediate HBM memory for D matrix (forget gate
+  // preactivations)
   const uint fTileColLastGlobalMemSize = sizeof(float) * batchSize * numHeads;
   float *fTileColLast;
   gpuErrchk(cudaMalloc((void **)&fTileColLast, fTileColLastGlobalMemSize));
