@@ -36,7 +36,9 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
 
 - vlstm_fwbw_v0: Build on vlstm_fw_v1, implement the backward pass using the same tiling strategy as FlashAttention2.
   - adapt forward to store the max state and the n state in HBM for reuse in backward.
-  - **TODO** Solve above todo: make forward more efficient during gate matrix computation (reuse previous computations/sums of forgetgates)
+  - make forward more efficient during gate matrix computation (reuse previous computations/sums of forgetgates):
+    - we sync the thread blocks in qTileDim direction over HBM. 
+    
 
 ## CUDA Resources
 
