@@ -164,10 +164,10 @@ def vlstm_fw_torch_ref(
     _dtype, _device = queries.dtype, queries.device
 
     # forget gate matrix
-    # log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
-    log_fgates = (
-        fgate_preact  # (B, NH, S, 1) #! We do not apply sigmoid here for debugging
-    )
+    log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
+    # log_fgates = (
+    #     fgate_preact  # (B, NH, S, 1) #! We do not apply sigmoid here for debugging
+    # )
 
     ltr = torch.tril(
         torch.ones(
@@ -201,7 +201,7 @@ def vlstm_fw_torch_ref(
     )  # (B, NH, S, S)
 
     # gate decay matrix D (combination of forget gate and input gate)
-    log_D_matrix = log_fg_matrix  # + igate_preact.transpose(-2, -1)  # (B, NH, S, S)
+    log_D_matrix = log_fg_matrix + igate_preact.transpose(-2, -1)  # (B, NH, S, S)
     # log_D_matrix = log_fg_matrix  # (B, NH, S, S)
     # D matrix stabilization
     max_log_D, _ = torch.max(log_D_matrix, dim=-1, keepdim=True)  # (B, NH, S, 1)
