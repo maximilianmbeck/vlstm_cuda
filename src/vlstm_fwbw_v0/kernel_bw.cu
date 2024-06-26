@@ -1394,12 +1394,26 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           deltaIGatePreact[dIdFThreadGlobalMemIdx] =
               SMEMVECTOR(deltaIChunk, dIdFChunkThreadSharedMemIdx);
 
-          // TODO: multiply with sigmoid derivative: sigmoid(-fGatePreact)
+          // multiply with sigmoid derivative: sigmoid(-fGatePreact)
+          scalar_t deltaFbar_val =
+              SMEMVECTOR(deltaFChunk, dIdFChunkThreadSharedMemIdx);
+          scalar_t fPreact_val = fGatePreact[dIdFThreadGlobalMemIdx];
+          //   scalar_t deltaF_val =
+          //       mul_g(deltaFbar_val, sigmoid_g(neg_g(fPreact_val)));
+          // TODO multiply with the correct fgate preact. (take care of index
+          // shifting)
+          scalar_t deltaF_val = fPreact_val;
+          if (dIdFChunkThreadSharedMemIdx == 0) {
+            deltaF_val = dscalar_zero<scalar_t>();
+          }
           // We need to shift the deltaFGatePreact by one to the right
           // since the first forgetgate f_1 is not used in the computation.
           // Therefore the first entry in deltaFGatePreact is 0.
-          deltaFGatePreact[dIdFThreadGlobalMemIdx + 1] =
-              SMEMVECTOR(deltaFChunk, dIdFChunkThreadSharedMemIdx);
+
+          // TODO from here: avoid accessing out of bounds (need to check that
+          // the very last value is not written)
+
+          deltaFGatePreact[dIdFThreadGlobalMemIdx + 1] = fPreact_val;
 #ifdef DEBUG_WRdeltaI
           if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx <= 8)) {
             printf("kvTileIdx=%d, dIdFChunkIdx=%d"
