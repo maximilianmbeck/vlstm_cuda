@@ -1390,6 +1390,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         const uint dIdFThreadGlobalMemIdx =
             iChunkBlockGlobalMemIdx + flatThreadIdx;
 
+        //* global dFIdx (virtual, as never materialized fully)
+        const uint dFChunkXdimBlockYThreadIdx =
+            sTileXdimBlockYIdx + dIdFChunkThreadSharedMemIdx;
+
         if (dIdFChunkThreadSharedMemIdx < KVtileDim) {
           deltaIGatePreact[dIdFThreadGlobalMemIdx] =
               SMEMVECTOR(deltaIChunk, dIdFChunkThreadSharedMemIdx);
@@ -1397,23 +1401,18 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           // multiply with sigmoid derivative: sigmoid(-fGatePreact)
           scalar_t deltaFbar_val =
               SMEMVECTOR(deltaFChunk, dIdFChunkThreadSharedMemIdx);
-          scalar_t fPreact_val = fGatePreact[dIdFThreadGlobalMemIdx];
-          //   scalar_t deltaF_val =
-          //       mul_g(deltaFbar_val, sigmoid_g(neg_g(fPreact_val)));
-          // TODO multiply with the correct fgate preact. (take care of index
-          // shifting)
-          scalar_t deltaF_val = fPreact_val;
-          if (dIdFChunkThreadSharedMemIdx == 0) {
-            deltaF_val = dscalar_zero<scalar_t>();
+
+          // avoid accessing out of bounds (need to check that
+          // the very last value is not written and not accessed)
+          if (dFChunkXdimBlockYThreadIdx < seqLen - 1) {
+            // need to shift index since the first forgetgate f_1 is not used
+            scalar_t fPreact_val = fGatePreact[dIdFThreadGlobalMemIdx + 1];
+
+            scalar_t deltaF_val =
+                mul_g(deltaFbar_val, sigmoid_g(neg_g(fPreact_val)));
+
+            deltaFGatePreact[dIdFThreadGlobalMemIdx + 1] = deltaF_val;
           }
-          // We need to shift the deltaFGatePreact by one to the right
-          // since the first forgetgate f_1 is not used in the computation.
-          // Therefore the first entry in deltaFGatePreact is 0.
-
-          // TODO from here: avoid accessing out of bounds (need to check that
-          // the very last value is not written)
-
-          deltaFGatePreact[dIdFThreadGlobalMemIdx + 1] = fPreact_val;
 #ifdef DEBUG_WRdeltaI
           if ((blockIdx.x == 0) && (blockIdx.y == 0) && (flatThreadIdx <= 8)) {
             printf("kvTileIdx=%d, dIdFChunkIdx=%d"
@@ -1428,6 +1427,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
         }
       }
+      __syncthreads();
 
     } // end looplevel 1 (j-loop)
 
