@@ -38,7 +38,11 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
   - adapt forward to store the max state and the n state in HBM for reuse in backward.
   - make forward more efficient during gate matrix computation (reuse previous computations/sums of forgetgates):
     - we sync the thread blocks in qTileDim direction over HBM. 
-  - TODO: set the start index in QtileDim direction if we iterate along kvTileDim direction with all thread blocks to avoid multiplies with 0.
+
+- vlstm_fwbw_v1: Build on vlstm_fwbw_v2, Increase / Tune Block & Grid dims. 
+   - Write combined numerical correctness checks.
+   - Add speed tests.
+   - Allocate temp global memory in kernel. 
     
 
 ## CUDA Resources
