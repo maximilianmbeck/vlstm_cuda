@@ -66,9 +66,9 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG11 1
 // #define DEBUG12 1
 
-#define DEBUG_fcolval1 1
+// #define DEBUG_fcolval1 1
 // #define DEBUG_fcolval2 1
-#define DEBUG_fcolval3 1
+// #define DEBUG_fcolval3 1
 
 #define OUTPUT_matD 1
 
