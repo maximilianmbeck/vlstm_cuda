@@ -1464,7 +1464,7 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const uint gridDimY = 1;
+  const uint gridDimY = 2;
   const dim3 gridDims(batchSize * numHeads, gridDimY);
   //   const dim3 gridDims(1, 1);
 

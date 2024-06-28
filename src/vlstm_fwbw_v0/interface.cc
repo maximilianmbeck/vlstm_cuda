@@ -54,8 +54,8 @@ interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV, Tensor iGatePreact,
 
   // store intermediate computations for backward pass
   // TODO these should be deallocated autmatically by pytorch
-  auto vecN = torch::zeros({batchSize, numHeads, seqLen}, matQ.options());
-  auto vecM = torch::zeros({batchSize, numHeads, seqLen}, matQ.options());
+  auto vecN = torch::zeros({batchSize, numHeads, seqLen, 1}, matQ.options());
+  auto vecM = torch::zeros({batchSize, numHeads, seqLen, 1}, matQ.options());
 
   // only for debugging: C or D matrix (S x S) (will be removed later)
   auto matC =
@@ -155,9 +155,9 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
   auto deltaV =
       torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matV.options());
   auto deltaIGatePreact =
-      torch::zeros({batchSize, numHeads, seqLen}, iGatePreact.options());
+      torch::zeros({batchSize, numHeads, seqLen, 1}, iGatePreact.options());
   auto deltaFGatePreact =
-      torch::zeros({batchSize, numHeads, seqLen}, fGatePreact.options());
+      torch::zeros({batchSize, numHeads, seqLen, 1}, fGatePreact.options());
 
   //* unused for now (remove later), we allocate the memory directly in the
   // kernel *//
