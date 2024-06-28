@@ -455,9 +455,9 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             for (uint i = 0; i < dimHeads; ++i) {
               acc =
                   add_g(acc, type2float(mul_g(
-                                 SMEMARRAY(qTile, dimHeads,
+                                 SMEMARRAY(deltaHTile, dimHeads,
                                            cWarpTileThreadSharedMemYIdx, i),
-                                 SMEMARRAY(kTile, dimHeads,
+                                 SMEMARRAY(vTile, dimHeads,
                                            cWarpTileThreadSharedMemXIdx, i))));
             }
             // dC = deltaH *V^T / n
