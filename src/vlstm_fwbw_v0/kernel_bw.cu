@@ -63,9 +63,9 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define OUTPUTdDTile 1
 // #define OUTPUTdDtildeTile 1
 // #define OUTPUTDTile 1
-#define OUTPUTDcsTile 1
-// #define OUTPUTPRTile 1
-#define OUTPUTPRTileR 1
+// #define OUTPUTDcsTile 1
+#define OUTPUTPRTile 1
+// #define OUTPUTPRTileR 1
 
 // #define DEBUG_WRdeltaI 1
 // #define DEBUG_deltaISUM0 1
@@ -1191,12 +1191,12 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             // scalar_t qk_acc = dscalar_zero<scalar_t>();
             float acc = 0.0f;
             for (uint i = 0; i < KVtileDim; ++i) {
-              acc = add_g(
-                  acc, type2float(mul_g(
-                           SMEMARRAY(sPTile, KVtileDim,
-                                     deltaQWarpTileThreadSharedMemYIdx, i),
-                           SMEMARRAY(kTile, dimHeads,
-                                     deltaQWarpTileThreadSharedMemXIdx, i))));
+              acc = add_g(acc,
+                          type2float(mul_g(
+                              SMEMARRAY(sPTile, KVtileDim,
+                                        deltaQWarpTileThreadSharedMemYIdx, i),
+                              SMEMARRAY(kTile, dimHeads, i,
+                                        deltaQWarpTileThreadSharedMemXIdx))));
             }
 
             // compute deltaQTile
@@ -1464,7 +1464,7 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const uint gridDimY = 2;
+  const uint gridDimY = 1;
   const dim3 gridDims(batchSize * numHeads, gridDimY);
   //   const dim3 gridDims(1, 1);
 
