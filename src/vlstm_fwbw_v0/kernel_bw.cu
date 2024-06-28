@@ -63,8 +63,8 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define OUTPUTdDTile 1
 // #define OUTPUTdDtildeTile 1
 // #define OUTPUTDTile 1
-// #define OUTPUTDcsTile 1
-#define OUTPUTPRTile 1
+#define OUTPUTDcsTile 1
+// #define OUTPUTPRTile 1
 // #define OUTPUTPRTileR 1
 
 // #define DEBUG_WRdeltaI 1
