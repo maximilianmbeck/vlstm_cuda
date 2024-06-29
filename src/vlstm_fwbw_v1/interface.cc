@@ -167,6 +167,7 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
   // TODO make this allocation in the kernel call (without torch api, e.g.
   // cuda_malloc())
   // -> there we know the QTILE_DIM
+  // TODO error -> these should always be float32
   auto csDeltaDTildeVec = torch::zeros({batchSize, numHeads, seqLen},
                                        matQ.options()); // cumsum(deltaDtilde)
   const uint gridDimY = 2;

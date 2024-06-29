@@ -43,6 +43,13 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
    - Write combined numerical correctness checks.
    - Add speed tests.
    - Allocate temp global memory in kernel. 
+   - TODO: fix bug on multiple iterations backward kernel does not match for delta Q & delta K anymore.
+      - Possible fixes:
+        - race condition: add synchronization around delta K + delta Q calculation (probably gridGroup.sync())
+          - mat P is always correct
+          - -> bug some where around deltaHtile or qTile loading 
+          - -> bug some where around writing the result to HBM
+        - allocate memory in python and pass it to the kernel (no HBM allocations on C side (besides the temporary ones within the kernel with cudaMalloc))
     
 
 ## CUDA Resources

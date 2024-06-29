@@ -63,9 +63,9 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define OUTPUTdDTile 1
 // #define OUTPUTdDtildeTile 1
 // #define OUTPUTDTile 1
-#define OUTPUTDcsTile 1
-// #define OUTPUTPRTile 1
-// #define OUTPUTPRTileR 1
+// #define OUTPUTDcsTile 1
+#define OUTPUTPRTile 1
+#define OUTPUTPRTileR 1
 
 // #define DEBUG_WRdeltaI 1
 // #define DEBUG_deltaISUM0 1
@@ -431,6 +431,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
                 deltaH[qdHWarpTileThreadGlobalMemIdx];
           }
         }
+        __syncthreads();
 
         //! Compute deltaCTile = (deltaHtile  vTile^T) / nChunk (and divide by
         //! nChunk)
@@ -801,6 +802,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
           }
         }
+        __syncthreads();
 #endif
 
         //! Compute csDTile = cumsum(deltaDtildeTile) (store in dCDcsTile)
@@ -1208,6 +1210,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
         __syncthreads();
 
+        gridGroup.sync();
+
         //! Atomic add deltaQTile to deltaQ in HBM
         // We sum up the deltaQTiles in the different thread blocks in the
         // global memory loops over rows (outer) and columns (inner) of
@@ -1243,6 +1247,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             atomicAdd(&(deltaQ[deltaQWarpTileThreadGlobalMemIdx]), deltaQ_val);
           }
         }
+        __syncthreads();
 
         //! Compute deltaKTile = pTile^T  (qTile/sqrt(d)) and update in SRAM
         // (KVtileDim x dimHeads) = (KVtileDim x QtileDim) x (QtileDim x
@@ -1287,6 +1292,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
         __syncthreads();
+
+        gridGroup.sync();
 
         //! Compute deltaVTile = rTile^T  (deltaHTile * 1 / nChunk) and update
         //! in SRAM
@@ -1335,7 +1342,11 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         }
         __syncthreads();
 
+        gridGroup.sync();
+
       } // end looplevel 2 (i-loop)
+
+      gridGroup.sync();
 
       //! Store deltaKTile & deltaVTile in HBM
       // loops over rows (outer) and columns (inner) of kTile and vTile

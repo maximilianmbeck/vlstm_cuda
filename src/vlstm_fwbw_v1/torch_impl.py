@@ -402,8 +402,8 @@ def vlstm_parallel_bw_torch_w_groupnorm(
     delta_Q = mat_P @ (keys / math.sqrt(DH))
     delta_K = mat_P.transpose(-2, -1) @ (queries / math.sqrt(DH))
 
-    var_C = var_QK * var_D
-    delta_V = var_C.transpose(-2, -1) @ (delta_Htilde / (var_n + eps))
+    var_R = var_QK * var_D
+    delta_V = var_R.transpose(-2, -1) @ (delta_Htilde / (var_n + eps))
     return (
         delta_Q,
         delta_K,
@@ -414,7 +414,7 @@ def vlstm_parallel_bw_torch_w_groupnorm(
         delta_Dtilde,
         delta_fbar,
         mat_P,
-        var_C,
+        var_R,
     )
 
 
