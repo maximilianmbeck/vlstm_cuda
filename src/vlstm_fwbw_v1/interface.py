@@ -46,17 +46,26 @@ def vlstm_fw_cuda(
     igate_preact: torch.Tensor,
     fgate_preact: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    B, NH, S, DH = mat_Q.size()
     mat_Q = mat_Q.contiguous()
     mat_K = mat_K.contiguous()
     mat_V = mat_V.contiguous()
     igate_preact = igate_preact.contiguous()
     fgate_preact = fgate_preact.contiguous()
 
-    out, n, m, mat_C = cppmodule.vlstm_fw(
-        mat_Q, mat_K, mat_V, igate_preact, fgate_preact
+    # allocate outputs and set to zero
+    mat_H = torch.zeros_like(mat_Q)
+    vec_n = torch.zeros((B, NH, S, 1), dtype=mat_Q.dtype, device=mat_Q.device)
+    vec_m = torch.zeros((B, NH, S, 1), dtype=mat_Q.dtype, device=mat_Q.device)
+
+    # only for debugging
+    mat_C = torch.zeros((B, NH, S, S), dtype=mat_Q.dtype, device=mat_Q.device)
+
+    cppmodule.vlstm_fw(
+        mat_H, vec_n, vec_m, mat_C, mat_Q, mat_K, mat_V, igate_preact, fgate_preact
     )
 
-    return out, n, m, mat_C
+    return mat_H, vec_n, vec_m, mat_C
 
 
 def vlstm_bw_cuda(

@@ -15,9 +15,9 @@
 
 namespace vlstm {
 
-std::tuple<Tensor, Tensor, Tensor, Tensor>
-interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV, Tensor iGatePreact,
-                    Tensor fGatePreact) {
+void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
+                         Tensor matQ, Tensor matK, Tensor matV,
+                         Tensor iGatePreact, Tensor fGatePreact) {
   const auto batchSize = matQ.size(0);
   const auto numHeads = matQ.size(1);
   const auto seqLen = matQ.size(2);
@@ -47,19 +47,6 @@ interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV, Tensor iGatePreact,
     printf("fGatePreact batch size, number of heads or "
            "sequence length mismatch!\n");
   }
-
-  // the output matrix
-  auto matH =
-      torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matQ.options());
-
-  // store intermediate computations for backward pass
-  // TODO these should be deallocated autmatically by pytorch
-  auto vecN = torch::zeros({batchSize, numHeads, seqLen, 1}, matQ.options());
-  auto vecM = torch::zeros({batchSize, numHeads, seqLen, 1}, matQ.options());
-
-  // only for debugging: C or D matrix (S x S) (will be removed later)
-  auto matC =
-      torch::zeros({batchSize, numHeads, seqLen, seqLen}, matQ.options());
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF2(
       matQ.scalar_type(), "vLSTMFw", ([&] {
@@ -109,7 +96,7 @@ interface::vlstm_fw(Tensor matQ, Tensor matK, Tensor matV, Tensor iGatePreact,
         }
       }));
 
-  return std::make_tuple(matH, vecN, vecM, matC);
+  return;
 }
 
 std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor>

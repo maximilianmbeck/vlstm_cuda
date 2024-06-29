@@ -39,17 +39,19 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
   - make forward more efficient during gate matrix computation (reuse previous computations/sums of forgetgates):
     - we sync the thread blocks in qTileDim direction over HBM. 
 
-- vlstm_fwbw_v1: Build on vlstm_fwbw_v2, Increase / Tune Block & Grid dims. 
+- vlstm_fwbw_v1: Build on vlstm_fwbw_v0, Increase / Tune Block & Grid dims. 
    - Write combined numerical correctness checks.
    - Add speed tests.
    - Allocate temp global memory in kernel. 
    - TODO: fix bug on multiple iterations backward kernel does not match for delta Q & delta K anymore.
       - Possible fixes:
-        - race condition: add synchronization around delta K + delta Q calculation (probably gridGroup.sync())
-          - mat P is always correct
+        1. race condition: add synchronization around delta K + delta Q calculation (probably gridGroup.sync())
+          - mat P and R is always correct
           - -> bug some where around deltaHtile or qTile loading 
           - -> bug some where around writing the result to HBM
-        - allocate memory in python and pass it to the kernel (no HBM allocations on C side (besides the temporary ones within the kernel with cudaMalloc))
+          - !!! adding syncs did not help so far. Error even persists if we have only 1 thread block, suspect something with memory allocation, move on to 2.
+        2. allocate memory in python and pass it to the kernel (no HBM allocations on C side (besides the temporary ones within the kernel with cudaMalloc))
+        - But if it is memory allocation why then only for Q, K ???
     
 
 ## CUDA Resources
