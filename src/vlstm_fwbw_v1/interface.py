@@ -122,9 +122,16 @@ class vLSTMParallelFwBwCuda(torch.autograd.Function):
         delta_C_unused: torch.Tensor,
     ):
         mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m = ctx.saved_tensors
-        delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact, mat_C = (
-            cppmodule.vlstm_bw(
-                delta_H, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
-            )
+        (
+            delta_Q,
+            delta_K,
+            delta_V,
+            delta_igate_preact,
+            delta_fgate_preact,
+            mat_C,
+            _,
+            _,
+        ) = cppmodule.vlstm_bw(
+            delta_H, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
         )
         return delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact
