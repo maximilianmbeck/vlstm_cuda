@@ -352,8 +352,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       const uint qTileStart = 0;
       for (uint qTileIdx = qTileStart; qTileIdx < qTileEnd; ++qTileIdx) {
 
-        //? Global Sync
-        gridGroup.sync();
         const uint iIdx = qTileIdx;
         //* qTile Global Memory Index
         const uint qdHdQTileBlockGlobalMemIdx =
@@ -432,6 +430,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           }
         }
         __syncthreads();
+        //? Global Sync
+        gridGroup.sync();
 
         //! Compute deltaCTile = (deltaHtile  vTile^T) / nChunk (and divide by
         //! nChunk)
@@ -1475,7 +1475,7 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const uint gridDimY = 2;
+  const uint gridDimY = 1;
   const dim3 gridDims(batchSize * numHeads, gridDimY);
   //   const dim3 gridDims(1, 1);
 
