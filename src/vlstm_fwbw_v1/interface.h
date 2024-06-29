@@ -11,13 +11,14 @@ using torch::Tensor;
 
 namespace interface {
 
-void vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC, Tensor mat_Q,
-              Tensor mat_K, Tensor mat_V, Tensor iGatePreact,
-              Tensor fGatePreact);
+void vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC, Tensor matQ,
+              Tensor matK, Tensor matV, Tensor vecIgp, Tensor vecFgp);
 
-std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor>
-vlstm_bw(Tensor delta_H, Tensor mat_Q, Tensor mat_K, Tensor mat_V,
-         Tensor iGatePreact, Tensor fGatePreact, Tensor vec_n, Tensor vec_m);
+void vlstm_bw(Tensor matDeltaQ, Tensor matDeltaK, Tensor matDeltaV,
+              Tensor vecDeltaIg, Tensor vecDeltaFg, Tensor vecDeltaDcumsum,
+              Tensor vecDeltaDcumsumChunkArr, Tensor matC, Tensor matDeltaH,
+              Tensor matQ, Tensor matK, Tensor matV, Tensor vecIgp,
+              Tensor vecFgp, Tensor vecN, Tensor vecM);
 
 } // namespace interface
 

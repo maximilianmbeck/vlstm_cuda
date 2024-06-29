@@ -43,15 +43,15 @@ def vlstm_fw_cuda(
     mat_Q: torch.Tensor,
     mat_K: torch.Tensor,
     mat_V: torch.Tensor,
-    igate_preact: torch.Tensor,
-    fgate_preact: torch.Tensor,
+    vec_igp: torch.Tensor,
+    vec_fgp: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     B, NH, S, DH = mat_Q.size()
     mat_Q = mat_Q.contiguous()
     mat_K = mat_K.contiguous()
     mat_V = mat_V.contiguous()
-    igate_preact = igate_preact.contiguous()
-    fgate_preact = fgate_preact.contiguous()
+    vec_igp = vec_igp.contiguous()
+    vec_fgp = vec_fgp.contiguous()
 
     # allocate outputs and set to zero
     mat_H = torch.zeros_like(mat_Q)
@@ -62,26 +62,79 @@ def vlstm_fw_cuda(
     mat_C = torch.zeros((B, NH, S, S), dtype=mat_Q.dtype, device=mat_Q.device)
 
     cppmodule.vlstm_fw(
-        mat_H, vec_n, vec_m, mat_C, mat_Q, mat_K, mat_V, igate_preact, fgate_preact
+        mat_H, vec_n, vec_m, mat_C, mat_Q, mat_K, mat_V, vec_igp, vec_fgp
     )
 
     return mat_H, vec_n, vec_m, mat_C
 
 
 def vlstm_bw_cuda(
-    delta_Htilde: torch.Tensor,
+    mat_delta_H: torch.Tensor,
     mat_Q: torch.Tensor,
     mat_K: torch.Tensor,
     mat_V: torch.Tensor,
-    igate_preact: torch.Tensor,
-    fgate_preact: torch.Tensor,
-    n: int,
-    m: int,
+    vec_igp: torch.Tensor,
+    vec_fgp: torch.Tensor,
+    vec_n: int,
+    vec_m: int,
 ) -> tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
 ]:
-    return cppmodule.vlstm_bw(
-        delta_Htilde, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
+    B, NH, S, DH = mat_Q.size()
+    mat_delta_H = mat_delta_H.contiguous()
+    mat_Q = mat_Q.contiguous()
+    mat_K = mat_K.contiguous()
+    mat_V = mat_V.contiguous()
+    vec_igp = vec_igp.contiguous()
+    vec_fgp = vec_fgp.contiguous()
+
+    # allocate outputs and set to zero
+    mat_delta_Q = torch.zeros_like(mat_Q)
+    mat_delta_K = torch.zeros_like(mat_K)
+    mat_delta_V = torch.zeros_like(mat_V)
+    vec_delta_igp = torch.zeros_like(vec_igp)
+    vec_delta_fgp = torch.zeros_like(vec_fgp)
+
+    # allocate intermediate values for threadblock synchronization
+    QTILEDIM = 8
+    GRIDDIMY = 2
+    vec_delta_D_cumsum = torch.zeros(
+        (B, NH, S, 1), dtype=torch.float32, device=mat_Q.device
+    )
+    vec_delta_D_cumsum_chunkarr = torch.zeros(
+        (B, NH, GRIDDIMY, QTILEDIM), dtype=torch.float32, device=mat_Q.device
+    )
+
+    # only for debugging
+    mat_C = torch.zeros((B, NH, S, S), dtype=mat_Q.dtype, device=mat_Q.device)
+
+    cppmodule.vlstm_bw(
+        mat_delta_Q,
+        mat_delta_K,
+        mat_delta_V,
+        vec_delta_igp,
+        vec_delta_fgp,
+        vec_delta_D_cumsum,
+        vec_delta_D_cumsum_chunkarr,
+        mat_C,
+        mat_delta_H,
+        mat_Q,
+        mat_K,
+        mat_V,
+        vec_igp,
+        vec_fgp,
+        vec_n,
+        vec_m,
+    )
+    return (
+        mat_delta_Q,
+        mat_delta_K,
+        mat_delta_V,
+        vec_delta_igp,
+        vec_delta_fgp,
+        mat_C,
+        vec_delta_D_cumsum,
+        vec_delta_D_cumsum_chunkarr,
     )
 
 
@@ -89,20 +142,20 @@ def vlstm_fwbw_cuda(
     mat_Q: torch.Tensor,
     mat_K: torch.Tensor,
     mat_V: torch.Tensor,
-    igate_preact: torch.Tensor,
-    fgate_preact: torch.Tensor,
+    vec_igp: torch.Tensor,
+    vec_fgp: torch.Tensor,
 ) -> torch.Tensor:
     mat_Q = mat_Q.contiguous()
     mat_K = mat_K.contiguous()
     mat_V = mat_V.contiguous()
-    igate_preact = igate_preact.contiguous()
-    fgate_preact = fgate_preact.contiguous()
+    vec_igp = vec_igp.contiguous()
+    vec_fgp = vec_fgp.contiguous()
 
-    hs, n, m, mat_C = vLSTMParallelFwBwCuda.apply(
-        mat_Q, mat_K, mat_V, igate_preact, fgate_preact
+    mat_H, vec_n, vec_m, mat_C = vLSTMParallelFwBwCuda.apply(
+        mat_Q, mat_K, mat_V, vec_igp, vec_fgp
     )
 
-    return hs, n, m, mat_C
+    return mat_H, vec_n, vec_m, mat_C
 
 
 class vLSTMParallelFwBwCuda(torch.autograd.Function):
@@ -113,14 +166,14 @@ class vLSTMParallelFwBwCuda(torch.autograd.Function):
         mat_Q: torch.Tensor,
         mat_K: torch.Tensor,
         mat_V: torch.Tensor,
-        igate_preact: torch.Tensor,
-        fgate_preact: torch.Tensor,
+        vec_igp: torch.Tensor,
+        vec_fgp: torch.Tensor,
     ):
-        mat_H, n, m, mat_C = cppmodule.vlstm_fw(
-            mat_Q, mat_K, mat_V, igate_preact, fgate_preact
+        mat_H, vec_n, vec_m, mat_C = vlstm_fw_cuda(
+            mat_Q, mat_K, mat_V, vec_igp, vec_fgp
         )
-        ctx.save_for_backward(mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m)
-        return mat_H, n, m, mat_C
+        ctx.save_for_backward(mat_Q, mat_K, mat_V, vec_igp, vec_fgp, vec_n, vec_m)
+        return mat_H, vec_n, vec_m, mat_C
 
     @staticmethod
     def backward(
@@ -130,7 +183,7 @@ class vLSTMParallelFwBwCuda(torch.autograd.Function):
         delta_m_unused: torch.Tensor,
         delta_C_unused: torch.Tensor,
     ):
-        mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m = ctx.saved_tensors
+        mat_Q, mat_K, mat_V, vec_igp, vec_fgp, vec_n, vec_m = ctx.saved_tensors
         (
             delta_Q,
             delta_K,
@@ -140,7 +193,5 @@ class vLSTMParallelFwBwCuda(torch.autograd.Function):
             mat_C,
             _,
             _,
-        ) = cppmodule.vlstm_bw(
-            delta_H, mat_Q, mat_K, mat_V, igate_preact, fgate_preact, n, m
-        )
+        ) = vlstm_bw_cuda(delta_H, mat_Q, mat_K, mat_V, vec_igp, vec_fgp, vec_n, vec_m)
         return delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact

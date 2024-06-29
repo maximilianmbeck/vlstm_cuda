@@ -16,8 +16,8 @@
 namespace vlstm {
 
 void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
-                         Tensor matQ, Tensor matK, Tensor matV,
-                         Tensor iGatePreact, Tensor fGatePreact) {
+                         Tensor matQ, Tensor matK, Tensor matV, Tensor vecIgp,
+                         Tensor vecFgp) {
   const auto batchSize = matQ.size(0);
   const auto numHeads = matQ.size(1);
   const auto seqLen = matQ.size(2);
@@ -37,14 +37,14 @@ void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
   if (!(matK.size(3) == dimHeads && matV.size(3) == dimHeads)) {
     printf("matK & matV should have the same dimension of heads!\n");
   }
-  if (!(iGatePreact.size(0) == batchSize && iGatePreact.size(1) == numHeads &&
-        iGatePreact.size(2) == seqLen)) {
-    printf("iGatePreact batch size, number of heads or "
+  if (!(vecIgp.size(0) == batchSize && vecIgp.size(1) == numHeads &&
+        vecIgp.size(2) == seqLen)) {
+    printf("vecIgp batch size, number of heads or "
            "sequence length mismatch!\n");
   }
-  if (!(fGatePreact.size(0) == batchSize && fGatePreact.size(1) == numHeads &&
-        fGatePreact.size(2) == seqLen)) {
-    printf("fGatePreact batch size, number of heads or "
+  if (!(vecFgp.size(0) == batchSize && vecFgp.size(1) == numHeads &&
+        vecFgp.size(2) == seqLen)) {
+    printf("vecFgp batch size, number of heads or "
            "sequence length mismatch!\n");
   }
 
@@ -60,10 +60,8 @@ void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
               reinterpret_cast<__nv_bfloat16 *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matK.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matV.data_ptr<scalar_t>()),
-              reinterpret_cast<__nv_bfloat16 *>(
-                  iGatePreact.data_ptr<scalar_t>()),
-              reinterpret_cast<__nv_bfloat16 *>(
-                  fGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(vecIgp.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(vecFgp.data_ptr<scalar_t>()),
               batchSize, numHeads, seqLen, dimHeads);
         } else if (std::is_same<scalar_t, at::Half>::value) {
           printf("before kernel dispatch - float16!\n");
@@ -75,8 +73,8 @@ void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
               reinterpret_cast<__half *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matK.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matV.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(iGatePreact.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(fGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(vecIgp.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(vecFgp.data_ptr<scalar_t>()),
               batchSize, numHeads, seqLen, dimHeads);
         } else if (std::is_same<scalar_t, float>::value) {
           printf("before kernel dispatch - float32!\n");
@@ -88,9 +86,9 @@ void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
               reinterpret_cast<float *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matK.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matV.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(iGatePreact.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(fGatePreact.data_ptr<scalar_t>()),
-              batchSize, numHeads, seqLen, dimHeads);
+              reinterpret_cast<float *>(vecIgp.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(vecFgp.data_ptr<scalar_t>()), batchSize,
+              numHeads, seqLen, dimHeads);
         } else {
           printf("No kernel for this dtype available.\n");
         }
@@ -99,10 +97,12 @@ void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
   return;
 }
 
-std::tuple<Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor>
-interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
-                    Tensor iGatePreact, Tensor fGatePreact, Tensor vecN,
-                    Tensor vecM) {
+void interface::vlstm_bw(Tensor matDeltaQ, Tensor matDeltaK, Tensor matDeltaV,
+                         Tensor vecDeltaIgp, Tensor vecDeltaFgp,
+                         Tensor vecDeltaDcumsum, Tensor vecDeltaDcumsumChunkArr,
+                         Tensor matC, Tensor deltaH, Tensor matQ, Tensor matK,
+                         Tensor matV, Tensor vecIgp, Tensor vecFgp, Tensor vecN,
+                         Tensor vecM) {
 
   const auto batchSize = matQ.size(0);
   const auto numHeads = matQ.size(1);
@@ -123,126 +123,122 @@ interface::vlstm_bw(Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
   if (!(matK.size(3) == dimHeads && matV.size(3) == dimHeads)) {
     printf("matK & matV should have the same dimension of heads!\n");
   }
-  if (!(iGatePreact.size(0) == batchSize && iGatePreact.size(1) == numHeads &&
-        iGatePreact.size(2) == seqLen)) {
-    printf("iGatePreact batch size, number of heads or "
+  if (!(vecIgp.size(0) == batchSize && vecIgp.size(1) == numHeads &&
+        vecIgp.size(2) == seqLen)) {
+    printf("vecIgp batch size, number of heads or "
            "sequence length mismatch!\n");
   }
-  if (!(fGatePreact.size(0) == batchSize && fGatePreact.size(1) == numHeads &&
-        fGatePreact.size(2) == seqLen)) {
-    printf("fGatePreact batch size, number of heads or "
+  if (!(vecFgp.size(0) == batchSize && vecFgp.size(1) == numHeads &&
+        vecFgp.size(2) == seqLen)) {
+    printf("vecFgp batch size, number of heads or "
            "sequence length mismatch!\n");
   }
 
-  // the output deltaErrors
-  auto deltaQ =
-      torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matQ.options());
-  auto deltaK =
-      torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matK.options());
-  auto deltaV =
-      torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matV.options());
-  auto deltaIGatePreact =
-      torch::zeros({batchSize, numHeads, seqLen, 1}, iGatePreact.options());
-  auto deltaFGatePreact =
-      torch::zeros({batchSize, numHeads, seqLen, 1}, fGatePreact.options());
+  // // the output deltaErrors
+  // auto matDeltaQ =
+  //     torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matQ.options());
+  // auto matDeltaK =
+  //     torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matK.options());
+  // auto matDeltaV =
+  //     torch::zeros({batchSize, numHeads, seqLen, dimHeads}, matV.options());
+  // auto vecDeltaIgp =
+  //     torch::zeros({batchSize, numHeads, seqLen, 1}, vecIgp.options());
+  // auto vecDeltaFgp =
+  //     torch::zeros({batchSize, numHeads, seqLen, 1}, vecFgp.options());
 
-  //* unused for now (remove later), we allocate the memory directly in the
-  // kernel *//
-  // intermediate global memory allocations:
-  // intermediate cumsums for cumsum(deltaDtilde Tile)
-  // TODO check if there is some "fast part" of the global memory
-  // TODO make this allocation in the kernel call (without torch api, e.g.
-  // cuda_malloc())
-  // -> there we know the QTILE_DIM
-  // TODO error -> these should always be float32
-  auto csDeltaDTildeVec = torch::zeros({batchSize, numHeads, seqLen},
-                                       matQ.options()); // cumsum(deltaDtilde)
-  const uint gridDimY = 2;
-  auto csDeltaDTildeChunkArr =
-      torch::ones({batchSize, numHeads, gridDimY, QTILE_DIM},
-                  matQ.options()); // cumsum(deltaDtilde)
+  // //* unused for now (remove later), we allocate the memory directly in the
+  // // kernel *//
+  // // intermediate global memory allocations:
+  // // intermediate cumsums for cumsum(deltaDtilde Tile)
+  // // TODO check if there is some "fast part" of the global memory
+  // // TODO make this allocation in the kernel call (without torch api, e.g.
+  // // cuda_malloc())
+  // // -> there we know the QTILE_DIM
+  // // TODO error -> these should always be float32
+  // auto vecDeltaDcumsum = torch::zeros({batchSize, numHeads, seqLen},
+  //                                     matQ.options()); //
+  // cumsum(deltaDtilde) const uint gridDimY = 2;
+  // auto vecDeltaDcumsumChunkArr =
+  //     torch::ones({batchSize, numHeads, gridDimY, QTILE_DIM},
+  //                 matQ.options()); // cumsum(deltaDtilde)
 
-  // only for debugging: C or D matrix (S x S) (will be removed later)
-  auto matC =
-      torch::zeros({batchSize, numHeads, seqLen, seqLen}, matQ.options());
+  // // only for debugging: C or D matrix (S x S) (will be removed later)
+  // auto matC =
+  //     torch::zeros({batchSize, numHeads, seqLen, seqLen}, matQ.options());
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF2(
       matQ.scalar_type(), "vLSTMBw", ([&] {
         if (std::is_same<scalar_t, at::BFloat16>::value) {
           printf("before kernel dispatch - bfloat16!\n");
           kernel_dispatchers::vlstm_bw_dispatch<__nv_bfloat16>(
-              reinterpret_cast<__nv_bfloat16 *>(deltaQ.data_ptr<scalar_t>()),
-              reinterpret_cast<__nv_bfloat16 *>(deltaK.data_ptr<scalar_t>()),
-              reinterpret_cast<__nv_bfloat16 *>(deltaV.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(matDeltaQ.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(matDeltaK.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(matDeltaV.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(
-                  deltaIGatePreact.data_ptr<scalar_t>()),
+                  vecDeltaIgp.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(
-                  deltaFGatePreact.data_ptr<scalar_t>()),
+                  vecDeltaFgp.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(deltaH.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matK.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matV.data_ptr<scalar_t>()),
-              reinterpret_cast<__nv_bfloat16 *>(
-                  iGatePreact.data_ptr<scalar_t>()),
-              reinterpret_cast<__nv_bfloat16 *>(
-                  fGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(vecIgp.data_ptr<scalar_t>()),
+              reinterpret_cast<__nv_bfloat16 *>(vecFgp.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(vecN.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(vecM.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(
-                  csDeltaDTildeChunkArr.data_ptr<float>()),
-              reinterpret_cast<float *>(csDeltaDTildeVec.data_ptr<float>()),
+                  vecDeltaDcumsumChunkArr.data_ptr<float>()),
+              reinterpret_cast<float *>(vecDeltaDcumsum.data_ptr<float>()),
               batchSize, numHeads, seqLen, dimHeads);
         } else if (std::is_same<scalar_t, at::Half>::value) {
           printf("before kernel dispatch - float16!\n");
           kernel_dispatchers::vlstm_bw_dispatch<__half>(
-              reinterpret_cast<__half *>(deltaQ.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(deltaK.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(deltaV.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(deltaIGatePreact.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(deltaFGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(matDeltaQ.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(matDeltaK.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(matDeltaV.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(vecDeltaIgp.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(vecDeltaFgp.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(deltaH.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matK.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(matV.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(iGatePreact.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(fGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(vecIgp.data_ptr<scalar_t>()),
+              reinterpret_cast<__half *>(vecFgp.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(vecN.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(vecM.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(
-                  csDeltaDTildeChunkArr.data_ptr<float>()),
-              reinterpret_cast<float *>(csDeltaDTildeVec.data_ptr<float>()),
+                  vecDeltaDcumsumChunkArr.data_ptr<float>()),
+              reinterpret_cast<float *>(vecDeltaDcumsum.data_ptr<float>()),
               batchSize, numHeads, seqLen, dimHeads);
         } else if (std::is_same<scalar_t, float>::value) {
           printf("before kernel dispatch - float32!\n");
           kernel_dispatchers::vlstm_bw_dispatch<float>(
-              reinterpret_cast<float *>(deltaQ.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(deltaK.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(deltaV.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(deltaIGatePreact.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(deltaFGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(matDeltaQ.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(matDeltaK.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(matDeltaV.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(vecDeltaIgp.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(vecDeltaFgp.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matC.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(deltaH.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matQ.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matK.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(matV.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(iGatePreact.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(fGatePreact.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(vecIgp.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(vecFgp.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(vecN.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(vecM.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(
-                  csDeltaDTildeChunkArr.data_ptr<float>()),
-              reinterpret_cast<float *>(csDeltaDTildeVec.data_ptr<float>()),
+                  vecDeltaDcumsumChunkArr.data_ptr<float>()),
+              reinterpret_cast<float *>(vecDeltaDcumsum.data_ptr<float>()),
               batchSize, numHeads, seqLen, dimHeads);
         } else {
           printf("No kernel for this dtype available.\n");
         }
       }));
 
-  return std::make_tuple(deltaQ, deltaK, deltaV, deltaIGatePreact,
-                         deltaFGatePreact, matC, csDeltaDTildeChunkArr,
-                         csDeltaDTildeVec);
+  return;
 }
 
 } // namespace vlstm

@@ -25,7 +25,7 @@ def check_multi_kernel_calls_fw(q, k, v, ig, fg, num_calls, atol, rtol):
     for i in tqdm(range(num_calls)):
         # run kernel
         hs_cu, n_cu, m_cu, matD_cu = vlstm_fw_cuda(
-            mat_Q=q, mat_K=k, mat_V=v, igate_preact=ig, fgate_preact=fg
+            mat_Q=q, mat_K=k, mat_V=v, vec_igp=ig, vec_fgp=fg
         )
 
         hs_correct.append(torch.allclose(hs_cu, hs_pt, rtol=rtol, atol=atol))
@@ -88,7 +88,7 @@ def check_multi_kernel_calls_fwbw(dH, q, k, v, ig, fg, num_calls, atol, rtol):
     for i in tqdm(range(num_calls)):
         # run kernel
         hs_cu, n_cu, m_cu, matD_cu = vlstm_fw_cuda(
-            mat_Q=q, mat_K=k, mat_V=v, igate_preact=ig, fgate_preact=fg
+            mat_Q=q, mat_K=k, mat_V=v, vec_igp=ig, vec_fgp=fg
         )
         (
             dQs_cu,
@@ -100,14 +100,14 @@ def check_multi_kernel_calls_fwbw(dH, q, k, v, ig, fg, num_calls, atol, rtol):
             deltaDcsChunkArr_cu,
             deltaDcsVec_cu,
         ) = vlstm_bw_cuda(
-            delta_Htilde=dH,
+            mat_delta_H=dH,
             mat_Q=q,
             mat_K=k,
             mat_V=v,
-            igate_preact=ig,
-            fgate_preact=fg,
-            n=n_cu,
-            m=m_cu,
+            vec_igp=ig,
+            vec_fgp=fg,
+            vec_n=n_cu,
+            vec_m=m_cu,
         )
 
         hs_correct.append(torch.allclose(hs_cu, hs_pt, rtol=rtol, atol=atol))
