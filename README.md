@@ -40,10 +40,11 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
     - we sync the thread blocks in qTileDim direction over HBM. 
 
 - vlstm_fwbw_v1: Build on vlstm_fwbw_v0, Increase / Tune Block & Grid dims. 
-   - Write combined numerical correctness checks.
-   - Add speed tests.
-   - Allocate temp global memory in kernel. 
-   - TODO: fix bug on multiple iterations backward kernel does not match for delta Q & delta K anymore.
+   - Write combined numerical correctness checks. OK
+   - Check correctnes for other dtypes. TODO
+   - Add speed tests. TODO
+   - Allocate temp global memory in kernel. TODO
+   - fix bug on multiple iterations backward kernel does not match for delta Q & delta K anymore. OK
       - Possible fixes:
         1. race condition: add synchronization around delta K + delta Q calculation (probably gridGroup.sync())
           - mat P and R is always correct
@@ -57,6 +58,12 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
         - yes, it is a bug in the kernel. -> find it!!
         - -> BUG FIXED! The deltaK Tile and deltaV Tile were not initialized in shared memory
     
+6. **Implement vLSTM forward pass with tensor cores**:
+
+7. **Implement vLSTM backward pass with tensor cores**:
+
+
+
 
 ## CUDA Resources
 

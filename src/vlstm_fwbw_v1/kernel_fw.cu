@@ -129,6 +129,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
   //? for intermediate results
   // init cTile (QtileDim x KVTileDim) in shared memory for intermediate
   // result of QK^T
+  // TODO initialize cTile to 0
   scalar_t *cTile =
       (scalar_t *)&vTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING)];
   // init result hTile (QTileDim x dimHeads) in shared memory
@@ -301,15 +302,19 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
         if (fThreadSharedMemYIdx < QtileDim) {
           SMEMVECTOR(fTileCol, fThreadSharedMemYIdx) = 0.0f;
-          // mPrevChunk
+          // mChunk & mPrevChunk
           SMEMVECTOR(mPrevChunk, fThreadSharedMemYIdx) =
               float2type<scalar_t>(-CUDART_INF_F);
-          // lPrevChunk
+          SMEMVECTOR(mChunk, fThreadSharedMemYIdx) =
+              float2type<scalar_t>(-CUDART_INF_F);
+          // lChunk & lPrevChunk
           SMEMVECTOR(lPrevChunk, fThreadSharedMemYIdx) =
               float2type<scalar_t>(0.0f);
-          // nPrevChunk
+          SMEMVECTOR(lChunk, fThreadSharedMemYIdx) = float2type<scalar_t>(0.0f);
+          // nChunk & nPrevChunk
           SMEMVECTOR(nPrevChunk, fThreadSharedMemYIdx) =
               float2type<scalar_t>(0.0f);
+          SMEMVECTOR(nChunk, fThreadSharedMemYIdx) = float2type<scalar_t>(0.0f);
         }
       }
       __syncthreads();
@@ -848,8 +853,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 l_acc = add_g(l_acc, type2float(c_tilde_val));
               }
             }
-
-            // compute l_val
+            // l_acc is the rowsum of cTile
+            // compute l_val = exp(m_prev - m) * l_prev + l_acc
             scalar_t l_prev_val = SMEMVECTOR(lPrevChunk, lThreadSharedMemYIdx);
             scalar_t l_val =
                 add_g(mul_g(exp_g(sub_g(m_prev_val, m_val)), l_prev_val),
@@ -874,9 +879,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           }
         } // end: lWarpChunkIdx
         __syncthreads();
-
-        // TODO Do we need to store lChunk in global memory for backward? What
-        // do we need to store?
 
         //! compute H += C * V, i.e. fill hTile
         //! accumulate KVtiles to hTile
@@ -1018,7 +1020,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       const uint nmChunkBlockGlobalMemIdx =
           nmChunkGridXYGlobalMemIdx + (1 * QtileDim) * blockIdx.y;
 
-      //! write nChunk and mChunk to global memory
+      //! write nChunk and mChunk to global memory for backward pass
       const uint nmChunkYEnd = CEIL_DIV(QtileDim, blockDim.x * blockDim.y);
       for (uint nmChunkYIdx = 0; nmChunkYIdx < nmChunkYEnd; ++nmChunkYIdx) {
         //? n&m idxes
