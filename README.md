@@ -52,6 +52,10 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
           - !!! adding syncs did not help so far. Error even persists if we have only 1 thread block, suspect something with memory allocation, move on to 2.
         2. allocate memory in python and pass it to the kernel (no HBM allocations on C side (besides the temporary ones within the kernel with cudaMalloc))
         - But if it is memory allocation why then only for Q, K ???
+        - !!! allocating the memory on python side also did not help
+        3. bug somewhere in kernel?
+        - yes, it is a bug in the kernel. -> find it!!
+        - -> BUG FIXED! The deltaK Tile and deltaV Tile were not initialized in shared memory
     
 
 ## CUDA Resources

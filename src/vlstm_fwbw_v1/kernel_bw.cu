@@ -324,12 +324,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           const uint kvWarpTileThreadGlobalMemIdx =
               kvWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
               threadIdx.x;
-          // just kept for reference:
-          // //! while loading k: k = k / sqrt(dimHeads)
-          // SMEMARRAY(kTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
-          //           kvWarpTileThreadSharedMemXIdx) =
-          //     mul_g(matK[kvWarpTileThreadGlobalMemIdx],
-          //           float2type<scalar_t>(rsqrtf(type2float((dimHeads)))));
+
           //! For simplicity: assume that KVtileDim is a multiple of blockDim.y
           //! and dimHeads is a multiple of blockDim.x
           SMEMARRAY(kTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
@@ -338,6 +333,12 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
           SMEMARRAY(vTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
                     kvWarpTileThreadSharedMemXIdx) =
               matV[kvWarpTileThreadGlobalMemIdx];
+
+          // init deltaKTile and deltaVTile to zero
+          SMEMARRAY(deltaKTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
+                    kvWarpTileThreadSharedMemXIdx) = dscalar_zero<scalar_t>();
+          SMEMARRAY(deltaVTile, dimHeads, kvWarpTileThreadSharedMemYIdx,
+                    kvWarpTileThreadSharedMemXIdx) = dscalar_zero<scalar_t>();
         }
       }
       __syncthreads();
