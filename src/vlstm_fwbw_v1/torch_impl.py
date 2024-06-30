@@ -392,17 +392,17 @@ def vlstm_parallel_bw_torch_w_groupnorm(
                 masked_deltaDtilde[:, :, k:, j].view(B, NH, -1).sum(dim=-1)
             )
 
-    delta_f = delta_fbar * torch.sigmoid(-fgate_preact)
+    delta_f = (delta_fbar * torch.sigmoid(-fgate_preact)).to(dtype=queries.dtype)
 
     # delta_i: input gate preactivation delta errors
-    delta_i = torch.sum(delta_Dtilde, dim=-2).unsqueeze_(-1)
+    delta_i = torch.sum(delta_Dtilde, dim=-2).unsqueeze_(-1).to(dtype=queries.dtype)
 
     # output delta-errors / gradients
-    mat_P = delta_C * var_D
+    mat_P = (delta_C * var_D).to(dtype=queries.dtype)
     delta_Q = mat_P @ (keys / math.sqrt(DH))
     delta_K = mat_P.transpose(-2, -1) @ (queries / math.sqrt(DH))
 
-    var_R = var_QK * var_D
+    var_R = (var_QK * var_D).to(dtype=queries.dtype)
     delta_V = var_R.transpose(-2, -1) @ (delta_Htilde / (var_n + eps))
     return (
         delta_Q,
