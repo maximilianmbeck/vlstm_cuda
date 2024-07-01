@@ -71,6 +71,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_fcolval3 1
 
 #define OUTPUT_matD 1
+// #define OUTPUT_matS 1
 
 /**
 Conventions:
@@ -801,6 +802,45 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             __syncthreads();
           }
         }
+
+#ifdef OUTPUT_matS
+        //! DEBUG only: write sTile to global memory
+        // left upper corner of cWarpTileBlock in C (global memory)
+        //* cdTile Global Memory Index (Debug only)
+        const uint cdTileGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxCD +
+            (seqLen * QtileDim * gridDim.y) * qTileIdx;
+        const uint cdTileBlockGlobalMemIdx = cdTileGridXYGlobalMemIdx +
+                                             (seqLen * QtileDim) * blockIdx.y +
+                                             (kvTileIdx * KVtileDim);
+
+        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+             ++cdWarpTileYIdx) {
+          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+               ++cdWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpTileThreadSharedMemYIdx =
+                blockDim.y * cdWarpTileYIdx + threadIdx.y;
+            const uint cdWarpTileThreadSharedMemXIdx =
+                blockDim.x * cdWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            const uint cdWarpTileBlockGlobalMemIdx =
+                cdTileBlockGlobalMemIdx +
+                (seqLen * blockDim.y) * cdWarpTileYIdx +
+                blockDim.x * cdWarpTileXIdx;
+            const uint cdWarpTileThreadGlobalMemIdx =
+                cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
+                threadIdx.x;
+
+            matC[cdWarpTileThreadGlobalMemIdx] =
+                SMEMARRAY(cTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                          cdWarpTileThreadSharedMemXIdx);
+          }
+        }
+#endif
 
         //! compute C_tilde: multiply S with dTile, i.e. fill cTile
         //! compute "raw normalizer" l: rowsum of cTile
