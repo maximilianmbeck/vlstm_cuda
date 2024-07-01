@@ -69,6 +69,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_fcolval1 1
 // #define DEBUG_fcolval2 1
 // #define DEBUG_fcolval3 1
+#define DEBUG_fcolval4 1
 
 #define OUTPUT_matD 1
 // #define OUTPUT_matS 1
@@ -412,15 +413,17 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           const uint fChunkAccIterEnd = gridDim.y; // blockIdx.y + 1;
           for (uint fChunkAccIterIdx = 0; fChunkAccIterIdx < fChunkAccIterEnd;
                ++fChunkAccIterIdx) {
+
 #ifdef DEBUG_fcolval2
-            if ((blockIdx.x == 0) && (blockIdx.y == 0) && flatThreadIdx == 0) {
-              printf("IDX: cTileBlockY=%d, qTileIdx=%d, fChunkIdx=%d (<%d), "
+            if ((blockIdx.x == 0) && (blockIdx.y == 0) && flatThreadIdx <= 1) {
+              printf("IDX: cTileBlockY=%d, qTileIdx=%d, fChunkAccIterIdx=%d "
+                     "(<%d), "
                      "blockIdx.y=%d, "
-                     "flatThreadIdx=%d, kvTileIdx=%d, InitFTileColVal=%f, "
+                     "FTIdx=%d, kvTileIdx=%d, InitFTileColVal=%f, "
                      "fTileColLast=%f\n",
-                     cTileBlockYIdx, qTileIdx, fChunkIdx, fChunkEnd, blockIdx.y,
-                     flatThreadIdx, kvTileIdx, SMEMVECTOR(fTileCol, 3),
-                     SMEMVECTOR(fTileColLast, 0));
+                     cTileBlockYIdx, qTileIdx, fChunkAccIterIdx,
+                     fChunkAccIterEnd, blockIdx.y, flatThreadIdx, kvTileIdx,
+                     SMEMVECTOR(fTileCol, 3), SMEMVECTOR(fTileColLast, 0));
             }
 #endif
             //? f idxes
@@ -496,16 +499,16 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                     break;
                   }
                   f_acc = add_g(f_acc, type2float(SMEMVECTOR(fChunk, i)));
-#ifdef DEBUG7
-                  if ((blockIdx.x == 0) && (blockIdx.y == 1) &&
-                      (flatThreadIdx == 6)) {
-                    printf(
-                        "qTileIdx=%d, fChunkIdx=%d (<%d), blockIdx.y=%d, "
-                        "flatThreadIdx=%d: "
-                        "fSumIdx=%d, dTileThreadYIdx=%d, f_acc=%f, fg(%d)=%f\n",
-                        qTileIdx, fChunkIdx, fChunkEnd, blockIdx.y,
-                        flatThreadIdx, fSumIdx, dTileThreadYIdx, f_acc, i,
-                        type2float(SMEMVECTOR(fChunk, i)));
+#ifdef DEBUG_fcolval4
+                  if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                      (flatThreadIdx == 7)) {
+                    printf("qTileIdx=%d, fChunkAccIterIdx=%d (<%d), "
+                           "blockIdx.y=%d, "
+                           "flatThreadIdx=%d: "
+                           "i=%d, dTileThreadYIdx=%d, f_acc=%f, fg(%d)=%f\n",
+                           qTileIdx, fChunkAccIterIdx, fChunkEnd, blockIdx.y,
+                           flatThreadIdx, i, dTileThreadYIdx, f_acc, fSumIdx,
+                           type2float(SMEMVECTOR(fChunk, i)));
                   }
 #endif
                 }
@@ -598,7 +601,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 iGatePreact[ifChunkThreadGlobalMemIdx];
             SMEMVECTOR(fChunk, ifThreadSharedMemYIdx) =
                 logsigmoid_g(fGatePreact[ifChunkThreadGlobalMemIdx]);
-            // without logsigmoid for debugging only:
+            // Debugging only: without logsigmoid:
             // SMEMVECTOR(fChunk, ifThreadSharedMemYIdx) =
             //     fGatePreact[ifChunkThreadGlobalMemIdx];
           }
@@ -652,10 +655,11 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                                            type2float(SMEMVECTOR(fChunk, i)));
               }
               // Debugging only: f_gate only:
-              //   d_val = f_acc_subtractfrom;
+              d_val = f_acc_subtractfrom;
 
-              d_val =
-                  add_g(f_acc_subtractfrom, type2float(SMEMVECTOR(iChunk, i)));
+              //   d_val =
+              //       add_g(f_acc_subtractfrom, type2float(SMEMVECTOR(iChunk,
+              //       i)));
 
               // max state
               d_max = max_g(d_max, d_val);
@@ -1115,7 +1119,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const dim3 gridDims(batchSize * numHeads, 2);
+  const dim3 gridDims(batchSize * numHeads, 1);
   //   const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size
