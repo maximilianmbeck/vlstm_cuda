@@ -96,14 +96,14 @@ def vlstm_bw_cuda(
     vec_delta_fgp = torch.zeros_like(vec_fgp)
 
     # allocate intermediate values for threadblock synchronization
-    QTILEDIM = 8
-    GRIDDIMY = 2
-    vec_delta_D_cumsum = torch.zeros(
-        (B, NH, S, 1), dtype=torch.float32, device=mat_Q.device
-    )
-    vec_delta_D_cumsum_chunkarr = torch.zeros(
-        (B, NH, GRIDDIMY, QTILEDIM), dtype=torch.float32, device=mat_Q.device
-    )
+    # QTILEDIM = 8
+    # GRIDDIMY = 2
+    # vec_delta_D_cumsum = torch.zeros(
+    #     (B, NH, S, 1), dtype=torch.float32, device=mat_Q.device
+    # )
+    # vec_delta_D_cumsum_chunkarr = torch.zeros(
+    #     (B, NH, GRIDDIMY, QTILEDIM), dtype=torch.float32, device=mat_Q.device
+    # )
 
     # only for debugging
     mat_C = torch.zeros((B, NH, S, S), dtype=mat_Q.dtype, device=mat_Q.device)
@@ -114,8 +114,8 @@ def vlstm_bw_cuda(
         mat_delta_V,
         vec_delta_igp,
         vec_delta_fgp,
-        vec_delta_D_cumsum,
-        vec_delta_D_cumsum_chunkarr,
+        # vec_delta_D_cumsum,
+        # vec_delta_D_cumsum_chunkarr,
         mat_C,
         mat_delta_H,
         mat_Q,
@@ -133,8 +133,8 @@ def vlstm_bw_cuda(
         vec_delta_igp,
         vec_delta_fgp,
         mat_C,
-        vec_delta_D_cumsum,
-        vec_delta_D_cumsum_chunkarr,
+        # vec_delta_D_cumsum,
+        # vec_delta_D_cumsum_chunkarr,
     )
 
 

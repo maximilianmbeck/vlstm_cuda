@@ -42,9 +42,10 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
 - vlstm_fwbw_v1: Build on vlstm_fwbw_v0, Increase / Tune Block & Grid dims. 
    - **TODOs**:
    - Write combined numerical correctness checks. OK
-   - Check correctnes for other dtypes. TODO
-   - Add speed tests. TODO
+   - Check correctnes for other dtypes. OK
    - Allocate temp global memory in kernel. TODO
+   - Check larger tile sizes + grid/threadblock dims
+   - Add speed tests. TODO
    - **Worklog**:
    - fix bug on multiple iterations backward kernel does not match for delta Q & delta K anymore. OK
       - Possible fixes:
@@ -64,7 +65,6 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
       - The kernel algorithm was correct. 
       - in inline_ops_fp16.cuh there was the definition of log_g(__half x) missing.
 
-  
     
 6. **Implement vLSTM forward pass with tensor cores**:
 

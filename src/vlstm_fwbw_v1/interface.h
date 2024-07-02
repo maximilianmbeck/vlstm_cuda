@@ -15,10 +15,9 @@ void vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC, Tensor matQ,
               Tensor matK, Tensor matV, Tensor vecIgp, Tensor vecFgp);
 
 void vlstm_bw(Tensor matDeltaQ, Tensor matDeltaK, Tensor matDeltaV,
-              Tensor vecDeltaIg, Tensor vecDeltaFg, Tensor vecDeltaDcumsum,
-              Tensor vecDeltaDcumsumChunkArr, Tensor matC, Tensor matDeltaH,
-              Tensor matQ, Tensor matK, Tensor matV, Tensor vecIgp,
-              Tensor vecFgp, Tensor vecN, Tensor vecM);
+              Tensor vecDeltaIg, Tensor vecDeltaFg, Tensor matC,
+              Tensor matDeltaH, Tensor matQ, Tensor matK, Tensor matV,
+              Tensor vecIgp, Tensor vecFgp, Tensor vecN, Tensor vecM);
 
 } // namespace interface
 

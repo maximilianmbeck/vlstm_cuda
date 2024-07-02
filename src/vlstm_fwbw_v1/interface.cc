@@ -98,10 +98,9 @@ void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
 }
 
 void interface::vlstm_bw(Tensor matDeltaQ, Tensor matDeltaK, Tensor matDeltaV,
-                         Tensor vecDeltaIgp, Tensor vecDeltaFgp,
-                         Tensor vecDeltaDcumsum, Tensor vecDeltaDcumsumChunkArr,
-                         Tensor matC, Tensor deltaH, Tensor matQ, Tensor matK,
-                         Tensor matV, Tensor vecIgp, Tensor vecFgp, Tensor vecN,
+                         Tensor vecDeltaIgp, Tensor vecDeltaFgp, Tensor matC,
+                         Tensor deltaH, Tensor matQ, Tensor matK, Tensor matV,
+                         Tensor vecIgp, Tensor vecFgp, Tensor vecN,
                          Tensor vecM) {
 
   const auto batchSize = matQ.size(0);
@@ -187,9 +186,6 @@ void interface::vlstm_bw(Tensor matDeltaQ, Tensor matDeltaK, Tensor matDeltaV,
               reinterpret_cast<__nv_bfloat16 *>(vecFgp.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(vecN.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(vecM.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(
-                  vecDeltaDcumsumChunkArr.data_ptr<float>()),
-              reinterpret_cast<float *>(vecDeltaDcumsum.data_ptr<float>()),
               batchSize, numHeads, seqLen, dimHeads);
         } else if (std::is_same<scalar_t, at::Half>::value) {
           printf("before kernel dispatch - float16!\n");
@@ -207,11 +203,8 @@ void interface::vlstm_bw(Tensor matDeltaQ, Tensor matDeltaK, Tensor matDeltaV,
               reinterpret_cast<__half *>(vecIgp.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(vecFgp.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(vecN.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(vecM.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(
-                  vecDeltaDcumsumChunkArr.data_ptr<float>()),
-              reinterpret_cast<float *>(vecDeltaDcumsum.data_ptr<float>()),
-              batchSize, numHeads, seqLen, dimHeads);
+              reinterpret_cast<__half *>(vecM.data_ptr<scalar_t>()), batchSize,
+              numHeads, seqLen, dimHeads);
         } else if (std::is_same<scalar_t, float>::value) {
           printf("before kernel dispatch - float32!\n");
           kernel_dispatchers::vlstm_bw_dispatch<float>(
@@ -228,11 +221,8 @@ void interface::vlstm_bw(Tensor matDeltaQ, Tensor matDeltaK, Tensor matDeltaV,
               reinterpret_cast<float *>(vecIgp.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(vecFgp.data_ptr<scalar_t>()),
               reinterpret_cast<float *>(vecN.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(vecM.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(
-                  vecDeltaDcumsumChunkArr.data_ptr<float>()),
-              reinterpret_cast<float *>(vecDeltaDcumsum.data_ptr<float>()),
-              batchSize, numHeads, seqLen, dimHeads);
+              reinterpret_cast<float *>(vecM.data_ptr<scalar_t>()), batchSize,
+              numHeads, seqLen, dimHeads);
         } else {
           printf("No kernel for this dtype available.\n");
         }
