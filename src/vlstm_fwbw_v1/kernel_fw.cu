@@ -113,9 +113,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
   //! Shared Memory aka SRAM
   // the data in this shared memory is shared across all threads in a thread
   // block
-  extern __shared__ __align__(
-      2) char sbuf[]; // declare it as float and redefine it later
-                      // TODO from here
+  extern __shared__ float sbuf[]; // declare it as float and redefine it later
+                                  // TODO from here
   //? for inputs
   // Note: keep in mind the memory is defined in a contiguous region.
   // One pointer has the full memory space until the next point is defined.
