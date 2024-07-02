@@ -190,15 +190,19 @@ sigmoid_unstable_g(const __nv_bfloat16 x) {
   return __hdiv(one, __hadd(one, hexp(__hneg(x))));
 }
 
-template <>
-__device__ __forceinline__ __nv_bfloat16 logsigmoid_g(const __nv_bfloat16 x) {
-  __nv_bfloat16 one = dscalar_one<__nv_bfloat16>();
-  if (gt_zero_g(x)) {
-    return __hneg(hlog(__hadd(one, hexp(__hneg(x)))));
-  } else {
-    return __hsub(x, hlog(__hadd(one, hexp(x))));
-  }
-}
+// this is actually not used
+// we use the template in inline_ops.cuh instead
+
+// template <>
+// __device__ __forceinline__ __nv_bfloat16 logsigmoid_g(const __nv_bfloat16 x)
+// {
+//   __nv_bfloat16 one = dscalar_one<__nv_bfloat16>();
+//   if (gt_zero_g(x)) {
+//     return __hneg(hlog(__hadd(one, hexp(__hneg(x)))));
+//   } else {
+//     return __hsub(x, hlog(__hadd(one, hexp(x))));
+//   }
+// }
 
 template <>
 __device__ __forceinline__ __nv_bfloat16

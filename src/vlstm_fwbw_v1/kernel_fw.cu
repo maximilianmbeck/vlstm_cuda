@@ -69,7 +69,8 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_fcolval1 1
 // #define DEBUG_fcolval2 1
 // #define DEBUG_fcolval3 1
-#define DEBUG_fcolval4 1
+// #define DEBUG_fcolval4 1
+#define DEBUG_fcolval5 1
 
 #define OUTPUT_matD 1
 // #define OUTPUT_matS 1
@@ -112,16 +113,20 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
   //! Shared Memory aka SRAM
   // the data in this shared memory is shared across all threads in a thread
   // block
-  extern __shared__ float sbuf[]; // declare it as float and redefine it later
-
+  extern __shared__ __align__(
+      2) char sbuf[]; // declare it as float and redefine it later
+                      // TODO from here
   //? for inputs
   // Note: keep in mind the memory is defined in a contiguous region.
   // One pointer has the full memory space until the next point is defined.
   // Therefore to read the size of a single shared memory array you need to
   // have a look at the offset for the next array.
+  // init fTileCol (QTileDim x 1) in shared memory for forget gate (first column
+  // of the QtileDim x KVtileDim dTile)
+  float *fTileCol = (float *)sbuf;
 
   // qtile (QtileDim x dimHeads) in shared memory (padding for alignment)
-  scalar_t *qTile = (scalar_t *)sbuf;
+  scalar_t *qTile = (scalar_t *)&fTileCol[QtileDim * (1 + SHARED_MEM_PADDING)];
   // kTile and vTile (KVtileDim x dimHeads) in shared memory
   scalar_t *kTile =
       (scalar_t *)&qTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
@@ -148,13 +153,10 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       (scalar_t *)&dTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
   // init fChunk (QTileDim x 1) in shared memory for forget gate
   scalar_t *fChunk = (scalar_t *)&iChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
-  // init fTileCol (QTileDim x 1) in shared memory for forget gate (first column
-  // of the QtileDim x KVtileDim dTile)
-  float *fTileCol = (float *)&fChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
 
   // init mChunk (QTileDim x 1) in shared memory for max state of
   // dTile
-  scalar_t *mChunk = (scalar_t *)&fTileCol[QtileDim * (1 + SHARED_MEM_PADDING)];
+  scalar_t *mChunk = (scalar_t *)&fChunk[QtileDim * (1 + SHARED_MEM_PADDING)];
   // init mPrevTileCol (QTileDim x 1) in shared memory for previous
   // max state of dTile
   scalar_t *mPrevChunk =
@@ -407,8 +409,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
           // loop chunkwise over the fGatePreacts up to the current qTile
           // position
-          const uint fChunkEnd = gridDim.y * qTileIdx + blockIdx.y + 1;
-          const uint fChunkStart = gridDim.y * qTileIdx;
+          //   const uint fChunkEnd = gridDim.y * qTileIdx + blockIdx.y + 1;
+          //   const uint fChunkStart = gridDim.y * qTileIdx;
           //   max(0, gridDim.y * (qTileIdx - 1) + blockIdx.y + 1);
           const uint fChunkAccIterEnd = gridDim.y; // blockIdx.y + 1;
           for (uint fChunkAccIterIdx = 0; fChunkAccIterIdx < fChunkAccIterEnd;
@@ -450,9 +452,29 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               if (fThreadSharedMemYIdx < QtileDim) {
                 SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
                     logsigmoid_g(fGatePreact[fThreadGlobalMemIdx]);
-                // without logsigmoid for debugging only:
+                // Debugging only: without logsigmoid
                 // SMEMVECTOR(fChunk, fThreadSharedMemYIdx) =
                 //     fGatePreact[fThreadGlobalMemIdx];
+#ifdef DEBUG_fcolval5
+                if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                    (flatThreadIdx <= 3)) {
+                  printf("qTileIdx=%d, fChunkAccIterIdx=%d (<%d), "
+                         "fWarpChunkIdx=%d,"
+                         "blockIdx.y=%d, "
+                         "flatThreadIdx=%d: "
+                         "logsig(fgs)SRAM[%d]=%f, fgsHBM[%d]=%f, "
+                         "logsig(fgs)HBM[%d]=%f\n",
+                         qTileIdx, fChunkAccIterIdx, fChunkAccIterEnd,
+                         fWarpChunkIdx, blockIdx.y, flatThreadIdx,
+                         fThreadSharedMemYIdx,
+                         type2float(SMEMVECTOR(fChunk, fThreadSharedMemYIdx)),
+                         fThreadGlobalMemIdx,
+                         type2float(fGatePreact[fThreadGlobalMemIdx]),
+                         fThreadGlobalMemIdx,
+                         type2float(
+                             logsigmoid_g(fGatePreact[fThreadGlobalMemIdx])));
+                }
+#endif
               }
             }
             __syncthreads();
@@ -655,11 +677,10 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                                            type2float(SMEMVECTOR(fChunk, i)));
               }
               // Debugging only: f_gate only:
-              d_val = f_acc_subtractfrom;
+              //   d_val = f_acc_subtractfrom;
 
-              //   d_val =
-              //       add_g(f_acc_subtractfrom, type2float(SMEMVECTOR(iChunk,
-              //       i)));
+              d_val =
+                  add_g(f_acc_subtractfrom, type2float(SMEMVECTOR(iChunk, i)));
 
               // max state
               d_max = max_g(d_max, d_val);

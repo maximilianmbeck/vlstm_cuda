@@ -1,5 +1,5 @@
 // Copyright 2023 JKU Linz, All Rights Reserved
-// Author: Korbinian Pöppel
+// Author: Korbinian Pöppel, Maximilian Beck
 // Adapted from the haste library
 //
 // See:
@@ -146,6 +146,10 @@ template <> __device__ __forceinline__ __half tanh_g(const __half x) {
     e2x = hexp(__hmul(two, x));
     return __hdiv(__hsub(e2x, one), __hadd(one, e2x));
   }
+}
+
+template <> __device__ __forceinline__ __half log_g(const __half x) {
+  return hlog(x);
 }
 
 template <> __device__ __forceinline__ __half sigmoid_g(const __half x) {
