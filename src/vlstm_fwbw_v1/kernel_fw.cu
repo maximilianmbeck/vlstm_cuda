@@ -72,6 +72,11 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_fcolval4 1
 // #define DEBUG_fcolval5 1
 
+// #define DEBUG_gridSize1 1
+
+#define DEBUG_hsout1 1
+// #define DEBUG_hsout2 1
+
 #define OUTPUT_matD 1
 // #define OUTPUT_matS 1
 
@@ -341,6 +346,16 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         // (along sequence dimension) (used for checking causality)
         const uint cTileGridXIdx = KVtileDim * kvTileIdx;
         const uint cTileBlockXIdx = cTileGridXIdx;
+
+#ifdef DEBUG_gridSize1
+        if ((blockIdx.x == 0) && (blockIdx.y == 1) && (threadIdx.x == 0) &&
+            threadIdx.y == 0) {
+          printf(
+              "BIdx=(%d,%d): qTileIdx=%d, kvTileIdx=%d, cTileBlockXY=(%d,%d)\n",
+              blockIdx.x, blockIdx.y, qTileIdx, kvTileIdx, cTileBlockXIdx,
+              cTileBlockYIdx);
+        }
+#endif
 
         //! kTile & vTile Loading
         // loops over rows (outer) and columns (inner) of kTile & vTile
@@ -928,8 +943,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             // compute n_val
             scalar_t n_val = max_g(abs_g(l_val), exp_g(neg_g(m_val)));
             SMEMVECTOR(nChunk, lThreadSharedMemYIdx) = n_val;
-#ifdef DEBUG12
-            if ((blockIdx.x == 0) && (blockIdx.y == 0)) {
+#ifdef DEBUG_hsout2
+            if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
+                (lThreadSharedMemYIdx < 4)) {
               printf("qTileIdx=%d, kvTileIdx=%d, cTBlXIdx=%d, "
                      "cTBlYIdx=%d, lThreadSMIdx=%d, tbIdxXY=(%d,%d): "
                      "l_val=%f, l_prev_val=%f, l_acc=%f, exp(-m_val)=%f, "
@@ -1019,9 +1035,30 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                         hWarpTileThreadSharedMemXIdx) =
                   add_g(weighted_h_prev_val, float2type<scalar_t>(sv_acc));
             }
-            __syncthreads();
-          }
-        }
+            // __syncthreads();
+
+#ifdef DEBUG_hsout1
+            if ((blockIdx.x == 0) && (blockIdx.y == 1) && (threadIdx.x == 0) &&
+                (threadIdx.y == 0) && (hWarpTileYIdx == 0) &&
+                (hWarpTileXIdx == 0)) {
+              printf(
+                  "qTIdx=%d, kvTdx=%d, "
+                  "cTBXY=(%d,%d), hWTXY=(%d,%d), hsXY[%d,%d]=%f, "
+                  "sv_acc=%f, wf_hprev=%f, n_val=%f, n_prev_val=%f, m_val=%f, "
+                  "m_prev_val=%f\n",
+                  qTileIdx, kvTileIdx, cTileBlockXIdx, cTileBlockYIdx,
+                  hWarpTileXIdx, hWarpTileYIdx, hWarpTileThreadSharedMemXIdx,
+                  hWarpTileThreadSharedMemYIdx,
+                  type2float(SMEMARRAY(hTile, dimHeads,
+                                       hWarpTileThreadSharedMemYIdx,
+                                       hWarpTileThreadSharedMemXIdx)),
+                  sv_acc, type2float(weighting_factor_h_prev),
+                  type2float(n_val), type2float(n_prev_val), type2float(m_val),
+                  type2float(m_prev_val));
+            }
+#endif
+          } // end hWarpTileXIdx
+        }   // end hWarpTileYIdx
         __syncthreads();
 
         //! move to next kvTileIdx
@@ -1108,6 +1145,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           // mChunk and lChunk
         }
       }
+      __syncthreads();
     } // end looplevel 1: qTileIdx
     __syncthreads();
   } // end looplevel 0: batchHeadIdx
