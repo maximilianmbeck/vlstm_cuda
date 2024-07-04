@@ -43,7 +43,7 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
    - **TODOs**:
    - Write combined numerical correctness checks. OK
    - Check correctnes for other dtypes. OK
-   - Allocate temp global memory in kernel. TODO
+   - Allocate temp global memory in kernel. OK
    - Check larger tile sizes + grid/threadblock dims TODO
    - Add speed tests. TODO
    - **Worklog**:
