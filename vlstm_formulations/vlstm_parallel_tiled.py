@@ -126,6 +126,10 @@ def vlstm_parallel_tiled(
 
             h_tile = torch.exp(m_prev - m) * (n_prev / n) * h_tile + c_tile @ v_tile
 
+            if q_idx == 10:
+                print(
+                    f"q_idx: {q_idx}, kv_idx: {kv_idx}, m_prev: {m_prev}, m: {m}, l_prev: {l_prev}, l: {l}, n_prev: {n_prev}, n: {n}"
+                )
             m_prev = m
             l_prev = l
             n_prev = n

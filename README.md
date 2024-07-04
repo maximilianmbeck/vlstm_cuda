@@ -69,6 +69,13 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
       - output hs in forward pass has nans for large sizes, only the last few entries (rows)
       - larger QtileDim and KVtileDim do not work yet
 
+    - Solving the nan in FW hs output:
+      - The nan stem from very large normalizer values for low kvTileIdxes, leading to infs (overflow)
+      - Reason: the first columns in the d matrix (lower left corner) contain large negative values, 
+        as first m_val we choose the max of this tile which is still very large. Then 
+        $n=max(|l|, e^{-m}) $ where $e^{-m}$ gets inf as $m<<0$.
+
+
     
 6. **Implement vLSTM forward pass with tensor cores**:
 
