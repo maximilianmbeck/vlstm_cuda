@@ -44,7 +44,7 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
    - Write combined numerical correctness checks. OK
    - Check correctnes for other dtypes. OK
    - Allocate temp global memory in kernel. TODO
-   - Check larger tile sizes + grid/threadblock dims
+   - Check larger tile sizes + grid/threadblock dims TODO
    - Add speed tests. TODO
    - **Worklog**:
    - fix bug on multiple iterations backward kernel does not match for delta Q & delta K anymore. OK

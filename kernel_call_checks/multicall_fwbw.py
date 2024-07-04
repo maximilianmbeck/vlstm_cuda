@@ -97,8 +97,6 @@ def check_multi_kernel_calls_fwbw(dH, q, k, v, ig, fg, num_calls, atol, rtol):
             dIgs_cu,
             dFgs_cu,
             matC_cu,
-            deltaDcsChunkArr_cu,
-            deltaDcsVec_cu,
         ) = vlstm_bw_cuda(
             mat_delta_H=dH,
             mat_Q=q,

@@ -1523,8 +1523,6 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   cudaStream_t stream;
   cudaStreamCreate(&stream);
 
-  // TODO bring this back later. For debugging purposes, we need to allocate
-  // memory in torch
   //? Allocate intermediate global memory for cumsum(deltaDtildeTile) along
   // KVdim
   //* csDeltaDTildeChunkArr: Used for sync within all y-dim TBs

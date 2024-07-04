@@ -191,7 +191,7 @@ class vLSTMParallelFwBwCuda(torch.autograd.Function):
             delta_igate_preact,
             delta_fgate_preact,
             mat_C,
-            _,
-            _,
+            # _,
+            # _,
         ) = vlstm_bw_cuda(delta_H, mat_Q, mat_K, mat_V, vec_igp, vec_fgp, vec_n, vec_m)
         return delta_Q, delta_K, delta_V, delta_igate_preact, delta_fgate_preact
