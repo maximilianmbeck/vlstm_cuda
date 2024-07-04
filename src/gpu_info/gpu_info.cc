@@ -66,10 +66,18 @@ public:
         prop.memPitch; //*< Maximum pitch in bytes allowed by memory copies */
     dict["maxThreadsPerBlock"] =
         prop.maxThreadsPerBlock; //*< Maximum number of threads per block */
-    dict["maxThreadsDim"] =
-        prop.maxThreadsDim; //*< Maximum size of each dimension of a block */
-    dict["maxGridSize"] =
-        prop.maxGridSize; //*< Maximum size of each dimension of a grid */
+    dict["maxThreadsDim[0]"] =
+        prop.maxThreadsDim[0]; //*< Maximum size of each dimension of a block */
+    dict["maxThreadsDim[1]"] =
+        prop.maxThreadsDim[1]; //*< Maximum size of each dimension of a block */
+    dict["maxThreadsDim[2]"] =
+        prop.maxThreadsDim[2]; //*< Maximum size of each dimension of a block */
+    dict["maxGridSize[0]"] =
+        prop.maxGridSize[0]; //*< Maximum size of each dimension of a grid */
+    dict["maxGridSize[1]"] =
+        prop.maxGridSize[1]; //*< Maximum size of each dimension of a grid */
+    dict["maxGridSize[2]"] =
+        prop.maxGridSize[2]; //*< Maximum size of each dimension of a grid */
     dict["clockRate"] = prop.clockRate; //*< Clock frequency in kilohertz */
     dict["totalConstMem"] =
         prop.totalConstMem; //*< Constant memory available on device in bytes */

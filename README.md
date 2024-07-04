@@ -42,7 +42,7 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
 - vlstm_fwbw_v1: Build on vlstm_fwbw_v0, Increase / Tune Block & Grid dims. 
    - **TODOs**:
    - Write combined numerical correctness checks. OK
-   - Check correctnes for other dtypes. OK
+   - Check correctness for other dtypes. OK
    - Allocate temp global memory in kernel. OK
    - Check larger tile sizes + grid/threadblock dims TODO
    - Add speed tests. TODO
@@ -55,15 +55,19 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
           - -> bug some where around writing the result to HBM
           - !!! adding syncs did not help so far. Error even persists if we have only 1 thread block, suspect something with memory allocation, move on to 2.
         2. allocate memory in python and pass it to the kernel (no HBM allocations on C side (besides the temporary ones within the kernel with cudaMalloc))
-        - But if it is memory allocation why then only for Q, K ???
-        - !!! allocating the memory on python side also did not help
+          - But if it is memory allocation why then only for Q, K ???
+          - !!! allocating the memory on python side also did not help
         3. bug somewhere in kernel?
-        - yes, it is a bug in the kernel. -> find it!!
-        - -> BUG FIXED! The deltaK Tile and deltaV Tile were not initialized in shared memory
+          - yes, it is a bug in the kernel. -> find it!!
+          - -> BUG FIXED! The deltaK Tile and deltaV Tile were not initialized in shared memory
 
     - fix half precision bug (numeric values did not match):
       - The kernel algorithm was correct. 
       - in inline_ops_fp16.cuh there was the definition of log_g(__half x) missing.
+
+    - bugs detected: 
+      - output hs in forward pass has nans for large sizes, only the last few entries (rows)
+      - larger QtileDim and KVtileDim do not work yet
 
     
 6. **Implement vLSTM forward pass with tensor cores**:
@@ -71,6 +75,13 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
 7. **Implement vLSTM backward pass with tensor cores**:
 
 
+
+## CUDA questions
+
+**Synchronization**:
+- How can I synchronize only parts of the gridGroup? Or how can I define gridGroups as subset of the whole grid. 
+  - Example: I want to synchronize only the blocks that are used for one batch head. Otheres should be independent.
+- Where to put __syncthreads(); ?
 
 
 ## CUDA Resources

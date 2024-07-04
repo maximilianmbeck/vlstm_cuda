@@ -1022,6 +1022,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             __syncthreads();
           }
         }
+        __syncthreads();
 
         //! move to next kvTileIdx
         // update lPrevChunk, mPrevChunk, nPrevChunk
@@ -1041,11 +1042,12 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 SMEMVECTOR(nChunk, lThreadSharedMemYIdx);
           }
         }
+        __syncthreads();
       } // end looplevel 2: kvTileIdx
 
       // TODO sync all blocks here, necessary? The loop above has different
       // number of iterations for each block
-      // gridGroup.sync();
+      //   gridGroup.sync();
 
       //! write hTile to global memory (has the same memory index as qTile)
       // loops over hTile rows (outer) and columns (inner)
@@ -1139,7 +1141,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const dim3 gridDims(batchSize * numHeads, 1);
+  const dim3 gridDims(batchSize * numHeads, 2);
   //   const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size
