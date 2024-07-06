@@ -40,10 +40,10 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 ////////////////////////////////////////////////////////////////////////////////////////
 
 #define TBLOCK_DIM 16 // TblockDim: corresponds to BLOCK_DIM in matmul
-#define KVTILE_DIM 32 // KVtileDim: TileDim for K&V along seqLen dim
+#define KVTILE_DIM 64 // KVtileDim: TileDim for K&V along seqLen dim
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM,
 // KVTILE_DIM <= QTILE_DIM
-#define QTILE_DIM 32 // QtileDim: TileDim for Q along seqLen dim
+#define QTILE_DIM 64 // QtileDim: TileDim for Q along seqLen dim
 
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
