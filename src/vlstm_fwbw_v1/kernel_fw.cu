@@ -899,8 +899,13 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           if (lThreadSharedMemYIdx < QtileDim) {
             // compute m_val
             scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, lThreadSharedMemYIdx);
-            scalar_t m_val =
-                max_g(m_prev_val, SMEMVECTOR(mChunk, lThreadSharedMemYIdx));
+            scalar_t m_val_unbounded = SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
+            // bound m_val from below to avoid overflow in exp(-m_val)
+            // TODO: adapt -10 according to precision exp(10) = 22026.5, for
+            // fp32 and bfloat16 this value could be higher
+            scalar_t m_val_bounded =
+                max_g(m_val_unbounded, float2type<scalar_t>(-10.0f));
+            scalar_t m_val = max_g(m_prev_val, m_val_bounded);
             SMEMVECTOR(mChunk, lThreadSharedMemYIdx) = m_val;
 
             // compute c_tilde_val in lower triangle of C Matrix

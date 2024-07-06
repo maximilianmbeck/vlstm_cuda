@@ -65,15 +65,15 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
       - The kernel algorithm was correct. 
       - in inline_ops_fp16.cuh there was the definition of log_g(__half x) missing.
 
-    - bugs detected: 
-      - output hs in forward pass has nans for large sizes, only the last few entries (rows)
-      - larger QtileDim and KVtileDim do not work yet
-
-    - Solving the nan in FW hs output:
+    - bug: output hs in forward pass has nans for large sizes, only the last few entries (rows)
       - The nan stem from very large normalizer values for low kvTileIdxes, leading to infs (overflow)
       - Reason: the first columns in the d matrix (lower left corner) contain large negative values, 
         as first m_val we choose the max of this tile which is still very large. Then 
         $n=max(|l|, e^{-m}) $ where $e^{-m}$ gets inf as $m<<0$.
+      - Solution: bound the m val from below by a specific value (currently -10, exp(10)=22026, within fp16 range)
+    
+    - bug: larger QtileDim and KVtileDim do not work yet
+
 
 
     

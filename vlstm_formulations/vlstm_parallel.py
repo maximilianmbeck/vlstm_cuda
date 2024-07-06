@@ -95,7 +95,7 @@ def vlstm_parallel_fw_torch(
 
     # retrieved values
     retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
-    return retrieved_values, log_D_matrix, C_matrix_normalized
+    return retrieved_values
 
 
 def vlstm_parallel_fwbw_torch(

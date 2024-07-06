@@ -270,7 +270,7 @@ def vlstm_parallel_tiled_stable(
 
 
 # non-tiled reference implementation
-def vlstm_fw_torch_ref(
+def vlstm_parallel_fw_torch_ref(
     queries: torch.Tensor,
     keys: torch.Tensor,
     values: torch.Tensor,
@@ -350,4 +350,4 @@ def vlstm_fw_torch_ref(
 
     # retrieved values
     retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
-    return retrieved_values, max_log_D, l
+    return retrieved_values, log_D_matrix, C_matrix_normalized
