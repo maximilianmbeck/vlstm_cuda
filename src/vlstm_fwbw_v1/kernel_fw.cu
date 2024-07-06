@@ -39,7 +39,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 ////////////////////////////////////////////////////////////////////////////////////////
 
-#define TBLOCK_DIM 4  // TblockDim: corresponds to BLOCK_DIM in matmul
+#define TBLOCK_DIM 16 // TblockDim: corresponds to BLOCK_DIM in matmul
 #define KVTILE_DIM 32 // KVtileDim: TileDim for K&V along seqLen dim
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM,
 // KVTILE_DIM <= QTILE_DIM

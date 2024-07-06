@@ -44,7 +44,7 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
    - Write combined numerical correctness checks. OK
    - Check correctness for other dtypes. OK
    - Allocate temp global memory in kernel. OK
-   - Check larger tile sizes + grid/threadblock dims TODO
+   - Check larger tile sizes + grid/threadblock dims IN PROGRESS
    - Add speed tests. TODO
    - **Worklog**:
    - fix bug on multiple iterations backward kernel does not match for delta Q & delta K anymore. OK
@@ -71,12 +71,16 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
         as first m_val we choose the max of this tile which is still very large. Then 
         $n=max(|l|, e^{-m}) $ where $e^{-m}$ gets inf as $m<<0$.
       - Solution: bound the m val from below by a specific value (currently -10, exp(10)=22026, within fp16 range)
-    
-    - bug: larger QtileDim and KVtileDim do not work yet
-
+   
     - possible bug / instability: still nan in fp16 with S=64, seed=0
       - Reason: the weighting factor for h_prev was computed suboptimally
       - Solution: compute it in the following order $(e^{m1-m2}*n1)/n2$ instead of computing the fraction first
+
+    - fix: larger QtileDim and KVtileDim do not work yet
+      - Works for quadratic tiles up to 32x32 with Threads16x16
+      - Not working yet: 
+        - KVTileDim < QTileDim
+        - quadratic tiles > 32x32
 
     
 6. **Implement vLSTM forward pass with tensor cores**:
