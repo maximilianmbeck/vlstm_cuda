@@ -39,11 +39,11 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 ////////////////////////////////////////////////////////////////////////////////////////
 
-#define TBLOCK_DIM 4 // TblockDim: corresponds to BLOCK_DIM in matmul
-#define KVTILE_DIM 8 // KVtileDim: TileDim for K&V along seqLen dim
+#define TBLOCK_DIM 4  // TblockDim: corresponds to BLOCK_DIM in matmul
+#define KVTILE_DIM 32 // KVtileDim: TileDim for K&V along seqLen dim
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM,
 // KVTILE_DIM <= QTILE_DIM
-#define QTILE_DIM 8 // QtileDim: TileDim for Q along seqLen dim
+#define QTILE_DIM 32 // QtileDim: TileDim for Q along seqLen dim
 
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
@@ -999,7 +999,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
           // weight = exp(m_prev - m) * n_prev / n
           scalar_t weighting_factor_h_prev =
-              mul_g(exp_g(sub_g(m_prev_val, m_val)), div_g(n_prev_val, n_val));
+              div_g(mul_g(exp_g(sub_g(m_prev_val, m_val)), n_prev_val), n_val);
 
           for (uint hWarpTileXIdx = 0; hWarpTileXIdx < hWarpTileXEnd;
                ++hWarpTileXIdx) {
@@ -1044,7 +1044,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 #ifdef DEBUG_hsout1
             if ((blockIdx.x == 0) && (blockIdx.y == 1) && (threadIdx.x == 0) &&
-                (threadIdx.y == 0) && (hWarpTileYIdx == 0) &&
+                (threadIdx.y <= 3) && //(hWarpTileYIdx == 0) &&
                 (hWarpTileXIdx == 0)) {
               printf(
                   "qTIdx=%d, kvTdx=%d, "

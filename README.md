@@ -74,7 +74,9 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
     
     - bug: larger QtileDim and KVtileDim do not work yet
 
-
+    - possible bug / instability: still nan in fp16 with S=64, seed=0
+      - Reason: the weighting factor for h_prev was computed suboptimally
+      - Solution: compute it in the following order $(e^{m1-m2}*n1)/n2$ instead of computing the fraction first
 
     
 6. **Implement vLSTM forward pass with tensor cores**:
