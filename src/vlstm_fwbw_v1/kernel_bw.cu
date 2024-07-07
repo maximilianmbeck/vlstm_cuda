@@ -43,11 +43,11 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
 ////////////////////////////////////////////////////////////////////////////////////////
 
-#define TBLOCK_DIM 4 // TblockDim: corresponds to BLOCK_DIM in matmul
-#define KVTILE_DIM 8 // KVtileDim: TileDim for K&V along seqLen dim
+#define TBLOCK_DIM 4  // TblockDim: corresponds to BLOCK_DIM in matmul
+#define KVTILE_DIM 16 // KVtileDim: TileDim for K&V along seqLen dim
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM,
 // KVTILE_DIM <= QTILE_DIM
-#define QTILE_DIM 8 // QtileDim: TileDim for Q along seqLen dim
+#define QTILE_DIM 16 // QtileDim: TileDim for Q along seqLen dim
 
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
@@ -60,11 +60,12 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #define SMEMVECTOR(array, idx) array[(idx) * (1 + SHARED_MEM_PADDING)]
 
 #define DEBUG 1
+#define OUTPUTsTile 1
 // #define OUTPUTdDTile 1
 // #define OUTPUTdDtildeTile 1
 // #define OUTPUTDTile 1
 // #define OUTPUTDcsTile 1
-#define OUTPUTPRTile 1
+// #define OUTPUTPRTile 1
 #define OUTPUTPRTileR 1
 
 // #define DEBUG_WRdeltaI 1
@@ -521,6 +522,44 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
         //! Compute dDtile = deltaCTile * sTile
         // Done with the pointwise multiplication in the previous step
+
+#ifdef OUTPUTsTile
+        //! DEBUG: write sTile to global memory
+        // left upper corner of cWarpTileBlock in C (global memory)
+        //* cdTile Global Memory Index (Debug only)
+        const uint cdTileGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxCD + (seqLen * QtileDim) * qTileIdx;
+        const uint cdTileBlockGlobalMemIdx =
+            cdTileGridXYGlobalMemIdx + (kvTileIdx * KVtileDim * gridDim.y) +
+            (1 * KVtileDim) * blockIdx.y;
+
+        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+             ++cdWarpTileYIdx) {
+          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+               ++cdWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpTileThreadSharedMemYIdx =
+                blockDim.y * cdWarpTileYIdx + threadIdx.y;
+            const uint cdWarpTileThreadSharedMemXIdx =
+                blockDim.x * cdWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            const uint cdWarpTileBlockGlobalMemIdx =
+                cdTileBlockGlobalMemIdx +
+                (seqLen * blockDim.y) * cdWarpTileYIdx +
+                blockDim.x * cdWarpTileXIdx;
+            const uint cdWarpTileThreadGlobalMemIdx =
+                cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
+                threadIdx.x;
+
+            matC[cdWarpTileThreadGlobalMemIdx] =
+                SMEMARRAY(sPTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                          cdWarpTileThreadSharedMemXIdx);
+          }
+        }
+#endif
 
 #ifdef OUTPUTdDTile
         //! DEBUG: write dDtile to global memory
@@ -1475,7 +1514,7 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const uint gridDimY = 2;
+  const uint gridDimY = 1;
   const dim3 gridDims(batchSize * numHeads, gridDimY);
   //   const dim3 gridDims(1, 1);
 
