@@ -40,10 +40,10 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 ////////////////////////////////////////////////////////////////////////////////////////
 
 #define TBLOCK_DIM 16 // TblockDim: corresponds to BLOCK_DIM in matmul
-#define KVTILE_DIM 64 // KVtileDim: TileDim for K&V along seqLen dim
+#define KVTILE_DIM 32 // KVtileDim: TileDim for K&V along seqLen dim
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM,
 // KVTILE_DIM <= QTILE_DIM
-#define QTILE_DIM 64 // QtileDim: TileDim for Q along seqLen dim
+#define QTILE_DIM 32 // QtileDim: TileDim for Q along seqLen dim
 
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
@@ -74,7 +74,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 // #define DEBUG_gridSize1 1
 
-#define DEBUG_hsout1 1
+// #define DEBUG_hsout1 1
 // #define DEBUG_hsout2 1
 
 #define OUTPUT_matD 1
@@ -1043,8 +1043,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             // __syncthreads();
 
 #ifdef DEBUG_hsout1
-            if ((blockIdx.x == 0) && (blockIdx.y == 1) && (threadIdx.x == 0) &&
-                (threadIdx.y <= 3) && //(hWarpTileYIdx == 0) &&
+            if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
+                (threadIdx.y <= 8) && //(hWarpTileYIdx == 0) &&
                 (hWarpTileXIdx == 0)) {
               printf(
                   "qTIdx=%d, kvTdx=%d, "
@@ -1184,7 +1184,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const dim3 gridDims(batchSize * numHeads, 2);
+  const dim3 gridDims(batchSize * numHeads, 1);
   //   const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size

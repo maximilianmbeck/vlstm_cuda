@@ -76,11 +76,19 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
       - Reason: the weighting factor for h_prev was computed suboptimally
       - Solution: compute it in the following order $(e^{m1-m2}*n1)/n2$ instead of computing the fraction first
 
-    - fix: larger QtileDim and KVtileDim do not work yet
+    - fix FW: larger QtileDim and KVtileDim do not work yet for forward pass
       - Works for quadratic tiles up to 32x32 with Threads16x16
+      - careful the input and/or grid dim must be chosen such that the grid dim is >= input
       - Not working yet: 
         - KVTileDim < QTileDim
         - quadratic tiles > 32x32
+      - Hypothesis: not working because too much shared memory is allocated! (But do not get an error during kernel launch.)
+
+    - fix FW: Enable KVTileDim < QTileDim TODO
+
+    - fix BW: Enable Q x KV > (8x8)
+      - For QxKV=16x16 (TB4): Dstr mat, dIgs, dFgs correct
+      
 
     
 6. **Implement vLSTM forward pass with tensor cores**:
@@ -96,6 +104,13 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
   - Example: I want to synchronize only the blocks that are used for one batch head. Otheres should be independent.
 - Where to put __syncthreads(); ?
 
+
+**Kernel Dispatch / Choosing Dimensions**:
+- Should I set a maximum grid dimension e.g. for the batch-head dimension depending on the number of streaming multiprocessors?
+  - Or just ignore the hardware (num streaming multiprocessors?)
+  - Currently I am doing the first thing, but still not sure how to choose the grid size.
+
+- See below: e.g. Total amount of shared memory per block / multiprocessor? What exactly is the difference?
 
 ## CUDA Resources
 
