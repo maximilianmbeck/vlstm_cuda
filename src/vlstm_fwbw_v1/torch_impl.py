@@ -412,6 +412,7 @@ def vlstm_parallel_bw_torch_w_groupnorm(
         delta_V,
         delta_i,
         delta_f,
+        delta_C,
         delta_D,
         delta_Dtilde,
         delta_fbar,

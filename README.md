@@ -87,7 +87,12 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
     - fix FW: Enable KVTileDim < QTileDim TODO
 
     - fix BW: Enable Q x KV > (8x8)
-      - For QxKV=16x16 (TB4): Dstr mat, dIgs, dFgs correct
+      - For QxKV=16x16 (TB4): 
+          - Dstr mat, dIgs, dFgs correct
+          - dQ,dK,dV wrong
+          - P, R matrices are wrong.
+          - Narrow down the bug to wrong sTile value. It is computed correctly, but then overridden,
+            with some wrong value. TODO find where
       
 
     
