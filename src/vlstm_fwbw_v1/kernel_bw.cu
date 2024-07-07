@@ -60,13 +60,13 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #define SMEMVECTOR(array, idx) array[(idx) * (1 + SHARED_MEM_PADDING)]
 
 #define DEBUG 1
-#define OUTPUTsTile 1
-// #define OUTPUTdDTile 1
+// #define OUTPUTdDsTile 1
+#define OUTPUTdDsTiledD 1
 // #define OUTPUTdDtildeTile 1
 // #define OUTPUTDTile 1
 // #define OUTPUTDcsTile 1
-// #define OUTPUTPRTile 1
-#define OUTPUTPRTileR 1
+#define OUTPUTPRTile 1
+// #define OUTPUTPRTileR 1
 
 // #define DEBUG_WRdeltaI 1
 // #define DEBUG_deltaISUM0 1
@@ -523,8 +523,8 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! Compute dDtile = deltaCTile * sTile
         // Done with the pointwise multiplication in the previous step
 
-#ifdef OUTPUTsTile
-        //! DEBUG: write sTile to global memory
+#ifdef OUTPUTdDsTile
+        //! DEBUG: write dDtile or sTile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
         //* cdTile Global Memory Index (Debug only)
         const uint cdTileGridXYGlobalMemIdx =
@@ -553,48 +553,15 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
             const uint cdWarpTileThreadGlobalMemIdx =
                 cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
                 threadIdx.x;
-
-            matC[cdWarpTileThreadGlobalMemIdx] =
-                SMEMARRAY(sPTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
-                          cdWarpTileThreadSharedMemXIdx);
-          }
-        }
-#endif
-
-#ifdef OUTPUTdDTile
-        //! DEBUG: write dDtile to global memory
-        // left upper corner of cWarpTileBlock in C (global memory)
-        //* cdTile Global Memory Index (Debug only)
-        const uint cdTileGridXYGlobalMemIdx =
-            batchHeadGridXGlobalMemIdxCD + (seqLen * QtileDim) * qTileIdx;
-        const uint cdTileBlockGlobalMemIdx =
-            cdTileGridXYGlobalMemIdx + (kvTileIdx * KVtileDim * gridDim.y) +
-            (1 * KVtileDim) * blockIdx.y;
-
-        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
-        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
-             ++cdWarpTileYIdx) {
-          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
-               ++cdWarpTileXIdx) {
-            //? cTileIdxes
-            //* shared memory:
-            const uint cdWarpTileThreadSharedMemYIdx =
-                blockDim.y * cdWarpTileYIdx + threadIdx.y;
-            const uint cdWarpTileThreadSharedMemXIdx =
-                blockDim.x * cdWarpTileXIdx + threadIdx.x;
-            //* global memory:
-            const uint cdWarpTileBlockGlobalMemIdx =
-                cdTileBlockGlobalMemIdx +
-                (seqLen * blockDim.y) * cdWarpTileYIdx +
-                blockDim.x * cdWarpTileXIdx;
-            const uint cdWarpTileThreadGlobalMemIdx =
-                cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
-                threadIdx.x;
-
+#ifdef OUTPUTdDsTiledD
             matC[cdWarpTileThreadGlobalMemIdx] =
                 SMEMARRAY(dDTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
                           cdWarpTileThreadSharedMemXIdx);
+#else
+            matC[cdWarpTileThreadGlobalMemIdx] =
+                SMEMARRAY(sPTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                          cdWarpTileThreadSharedMemXIdx);
+#endif
           }
         }
 #endif
