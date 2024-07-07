@@ -578,6 +578,10 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         // store the last row of the D'Tile in fAccRowChunk
         // take care of causality
 
+        // TODO from here there must be a bug in this section up to P R tile
+        // computation there is a wrong write to SRAM where the sTile is
+        // overriden
+
         // loop in j-direction (kvTileDim / x-dim)
         const uint dTileXdimEnd = CEIL_DIV(KVtileDim, blockDim.x * blockDim.y);
         for (uint dTileXdimIdx = 0; dTileXdimIdx < dTileXdimEnd;
@@ -709,7 +713,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
         //! Compute deltaDtildeTile = deltaDTile * D'Tile
         // Computed with pointwise multiplication in the previous step
 
-        // TODO from here there must be a bug in this section
         //! Compute pTile = deltaCTile * D'Tile
         //! Compute rTile = sTile * D'Tile
         // left upper corner of cWarpTileBlock in C (global memory)
@@ -811,8 +814,6 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 #endif
 
         //! Compute csDTile = cumsum(deltaDtildeTile) (store in dCDcsTile)
-        // TODO extend this with sync between thread blocks over
-        // TODO fgate delta computation not implemented yet
 
         //* 1) Init deltaDcsIterHBM to zero in HBM
         // deltaDcsIterHBM: (gridDim.y x QTileDim)
