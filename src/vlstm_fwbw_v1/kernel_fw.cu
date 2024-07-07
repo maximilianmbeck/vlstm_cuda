@@ -47,7 +47,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
-#define SHARED_MEM_PADDING 8 // SHARED_MEM_PADDING: padding for shared memory
+#define SHARED_MEM_PADDING 4 // SHARED_MEM_PADDING: padding for shared memory
 
 // SMEMARRAY: access shared memory array (2D)
 #define SMEMARRAY(array, stride, row, col)                                     \
@@ -1184,7 +1184,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const dim3 gridDims(batchSize * numHeads, 1);
+  const dim3 gridDims(batchSize * numHeads, 2);
   //   const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size

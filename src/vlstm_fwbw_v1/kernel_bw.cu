@@ -43,15 +43,16 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 
 ////////////////////////////////////////////////////////////////////////////////////////
 
-#define TBLOCK_DIM 4  // TblockDim: corresponds to BLOCK_DIM in matmul
-#define KVTILE_DIM 16 // KVtileDim: TileDim for K&V along seqLen dim
+#define TBLOCK_DIM 16 // TblockDim: corresponds to BLOCK_DIM in matmul
+#define KVTILE_DIM 32 // KVtileDim: TileDim for K&V along seqLen dim
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM,
 // KVTILE_DIM <= QTILE_DIM
-#define QTILE_DIM 16 // QtileDim: TileDim for Q along seqLen dim
+#define QTILE_DIM 32 // QtileDim: TileDim for Q along seqLen dim
 
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
-#define SHARED_MEM_PADDING 8 // SHARED_MEM_PADDING: padding for shared memory
+#define SHARED_MEM_PADDING 4 // SHARED_MEM_PADDING: padding for shared memory
+// for Q32xKV32 float32: SMEM_PAD=8 -> 64384 bytes, SMEM_PAD=1 -> 48256 bytes
 
 // SMEMARRAY: access shared memory array (2D)
 #define SMEMARRAY(array, stride, row, col)                                     \
@@ -83,7 +84,7 @@ __global__ void vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
 // #define DEBUG_DeltaDCS1 1
 // #define DEBUG_DeltaDCS2 1
 
-#define DEBUG_PRmat 1
+// #define DEBUG_PRmat 1
 
 /**
 Conventions:
@@ -186,7 +187,7 @@ kernels::vlstm_bw(scalar_t *deltaQ, scalar_t *deltaK, scalar_t *deltaV,
       (scalar_t *)&deltaFChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
   // sTile (QtileDim x KVtileDim)
   scalar_t *sPTile =
-      (scalar_t *)&dstrRTile[KVtileDim * (1 + SHARED_MEM_PADDING)];
+      (scalar_t *)&dstrRTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
   // dDTile (QtileDim x KVtileDim)
   scalar_t *dDTile =
       (scalar_t *)&sPTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
@@ -1480,7 +1481,7 @@ void kernel_dispatchers::vlstm_bw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const uint gridDimY = 1;
+  const uint gridDimY = 2;
   const dim3 gridDims(batchSize * numHeads, gridDimY);
   //   const dim3 gridDims(1, 1);
 
@@ -1512,14 +1513,14 @@ void kernel_dispatchers::vlstm_bw_dispatch(
       sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING);
 
   // we keep these as float as it acts as accumulator
-  // for the fTileRow during D' computation
-  const uint fTileRowSharedMemSize =
+  // for the forget gates during D' computation
+  const uint fAccRowChunkSharedMemSize =
       sizeof(float) * KVtileDim * (1 + SHARED_MEM_PADDING);
 
   const uint sharedMemorySize =
       3 * qdQdHTileSharedMemSize + 4 * kvdKdVTileSharedMemSize +
       3 * ididfChunkSharedMemSize + 3 * nmfChunkSharedMemSize +
-      4 * sdprdcddTileSharedMemSize + 1 * fTileRowSharedMemSize;
+      4 * sdprdcddTileSharedMemSize + 1 * fAccRowChunkSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);

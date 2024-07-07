@@ -92,8 +92,11 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
           - dQ,dK,dV wrong
           - P, R matrices are wrong.
           - Narrow down the bug to wrong sTile value. It is computed correctly, but then overridden,
-            with some wrong value. TODO find where
+            with some wrong value.
+          - BUG FIXED: error was wrong shared memory setup for dstrRTile (took 2.5h)
       
+    - Problem: works only up to head dimension 32 (float32) and 54 (float16 & bfloat16)
+      - TODO how can we fix this (Insert another loop for loading from global memory?)
 
     
 6. **Implement vLSTM forward pass with tensor cores**:
