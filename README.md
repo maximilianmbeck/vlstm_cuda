@@ -128,8 +128,14 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
 - Should I set a maximum grid dimension e.g. for the batch-head dimension depending on the number of streaming multiprocessors?
   - Or just ignore the hardware (num streaming multiprocessors?)
   - Currently I am doing the first thing, but still not sure how to choose the grid size.
+  - Thunderkittens grid dim assigment for h100_fwd: `dim3 grid(N/(NUM_WORKERS*kittens::TILE_DIM), batch*heads, 1);`
+    N: Sequence Length, TILE_DIM=16, NUM_WORKERS=8.
+  - In CUDA bf16TensorCoreGEMM: 
+    ```checkKernelErrors((compute_bf16gemm<<<deviceProp.multiProcessorCount * 2,
+                                            THREADS_PER_BLOCK, SHMEM_SZ>>>(A, B, C, D, alpha, beta)));```
 
 - See below: e.g. Total amount of shared memory per block / multiprocessor? What exactly is the difference?
+  - See this conversation with ChatGPT: https://chatgpt.com/share/7a1eef5b-c505-4492-87be-6183193da004 
 
 ## CUDA Resources
 
