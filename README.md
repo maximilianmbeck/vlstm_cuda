@@ -98,8 +98,19 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
     - Problem: works only up to head dimension 32 (float32) and 54 (float16 & bfloat16)
       - TODO how can we fix this (Insert another loop for loading from global memory?)
 
+    - 8.7.24 Open TODOs: (will move to forward pass with tensor cores)
+      - Enable KVTileDim < QTileDim
+      - Go to larger tile dim, i.e. >32x32
+      - Enable head dimension larger than 32 (float32) and 54 (float16 & bfloat16)
+
     
 6. **Implement vLSTM forward pass with tensor cores**:
+
+We continue with the forward kernel from vlstm_fwbw_v1 and integrate tensor cores. 
+We do not focus on backward kernel for now, hence only the fw kernel will be modified in vlstm_fwbw_v2.
+- vlstm_fwbw_v2: 
+
+
 
 7. **Implement vLSTM backward pass with tensor cores**:
 
