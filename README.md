@@ -69,7 +69,7 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
       - The nan stem from very large normalizer values for low kvTileIdxes, leading to infs (overflow)
       - Reason: the first columns in the d matrix (lower left corner) contain large negative values, 
         as first m_val we choose the max of this tile which is still very large. Then 
-        $n=max(|l|, e^{-m}) $ where $e^{-m}$ gets inf as $m<<0$.
+        $n=max(|l|, e^{-m})$ where $e^{-m}$ gets inf as $m<<0$.
       - Solution: bound the m val from below by a specific value (currently -10, exp(10)=22026, within fp16 range)
    
     - possible bug / instability: still nan in fp16 with S=64, seed=0
@@ -131,8 +131,7 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
   - Thunderkittens grid dim assigment for h100_fwd: `dim3 grid(N/(NUM_WORKERS*kittens::TILE_DIM), batch*heads, 1);`
     N: Sequence Length, TILE_DIM=16, NUM_WORKERS=8.
   - In CUDA bf16TensorCoreGEMM: 
-    ```checkKernelErrors((compute_bf16gemm<<<deviceProp.multiProcessorCount * 2,
-                                            THREADS_PER_BLOCK, SHMEM_SZ>>>(A, B, C, D, alpha, beta)));```
+    ```checkKernelErrors((compute_bf16gemm<<<deviceProp.multiProcessorCount * 2,          THREADS_PER_BLOCK, SHMEM_SZ>>>(A, B, C, D, alpha, beta)));```
 
 - See below: e.g. Total amount of shared memory per block / multiprocessor? What exactly is the difference?
   - See this conversation with ChatGPT: https://chatgpt.com/share/7a1eef5b-c505-4492-87be-6183193da004 
