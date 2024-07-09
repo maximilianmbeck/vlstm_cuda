@@ -40,7 +40,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 ////////////////////////////////////////////////////////////////////////////////////////
 
 #define TBLOCK_DIM 16 // TblockDim: corresponds to BLOCK_DIM in matmul
-#define KVTILE_DIM 32 // KVtileDim: TileDim for K&V along seqLen dim
+#define KVTILE_DIM 16 // KVtileDim: TileDim for K&V along seqLen dim
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM,
 // KVTILE_DIM <= QTILE_DIM
 #define QTILE_DIM 32 // QtileDim: TileDim for Q along seqLen dim
@@ -1238,8 +1238,10 @@ void kernel_dispatchers::vlstm_fw_dispatch(
       fTileColSharedMemSize + 2 * mChunkSharedMemSize +
       2 * lChunkSharedMemSize + 2 * nChunkSharedMemSize;
 
-  printf("blocksxy: %d-%d, threadsxy: %d-%d, shared_mem in bytes: %d\n",
-         gridDims.x, gridDims.y, blockDims.x, blockDims.y, sharedMemorySize);
+  printf("blocksxy: %d-%d, threadsxy: %d-%d, QtileDim: %d, KVtileDim: %d, "
+         "shared_mem in bytes: %d\n",
+         gridDims.x, gridDims.y, blockDims.x, blockDims.y, QTILE_DIM, KVtileDim,
+         sharedMemorySize);
   // cudaSetDevice(0);
 
   cudaStream_t stream;
@@ -1265,8 +1267,9 @@ void kernel_dispatchers::vlstm_fw_dispatch(
       (void *)&fTileColLast, (void *)&batchSize,   (void *)&numHeads,
       (void *)&seqLen,       (void *)&dimHeads};
 
-  cudaLaunchCooperativeKernel((void *)kernel, gridDims, blockDims, kernelArgs,
-                              sharedMemorySize, stream);
+  //   cudaLaunchCooperativeKernel((void *)kernel, gridDims, blockDims,
+  //   kernelArgs,
+  //                               sharedMemorySize, stream);
 
   gpuErrchk(cudaPeekAtLastError());
 
