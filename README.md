@@ -127,6 +127,8 @@ These samples demonstrate how to use CUDA tensor cores with fp16 and bfloat16.
 
 **Goal**: Write a wrapper to call this matrix multiply kernel from python/pytorch.
 
+- mm_v3: Matrix multiply with tensor cores, callable from pytorch.
+
 7. **Implement vLSTM forward pass with tensor cores**:
 
 We continue with the forward kernel from vlstm_fwbw_v1 and integrate tensor cores.
