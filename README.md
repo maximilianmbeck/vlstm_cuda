@@ -103,16 +103,31 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
       - Go to larger tile dim, i.e. >32x32
       - Enable head dimension larger than 32 (float32) and 54 (float16 & bfloat16)
 
+6. **Implement a Matrix Multiply with Tensor Cores**
+
+We built on 2 CUDA samples: bf16TensorCoreGemm & cudaTensorCoreGemm
+These samples demonstrate how to use CUDA tensor cores with fp16 and bfloat16.
+
+**Goal**: Write a wrapper to call this matrix multiply kernel from python/pytorch. 
+
     
-6. **Implement vLSTM forward pass with tensor cores**:
+7. **Implement vLSTM forward pass with tensor cores**:
 
 We continue with the forward kernel from vlstm_fwbw_v1 and integrate tensor cores. 
 We do not focus on backward kernel for now, hence only the fw kernel will be modified in vlstm_fwbw_v2.
 - vlstm_fwbw_v2: 
+  - **TODOs**:
+  - Goal: Enable larger tiles for the forward pass
+    - Stream 1: Use cudaFuncAttributeMaxDynamicSharedMemorySize to set the possible sharedMemPerBlockOptin. See how large we can make the tiles. 
+      - probably impacts occupancy (#blocks used per multiprocessor)
+    - Stream 2: Add another loop / tiling dimension along the head dimension to reduce shared memory
+  - use float4 / int4 for load/writes to global memory
+
+  - **WORKLOG**:
+  - continue later
 
 
-
-7. **Implement vLSTM backward pass with tensor cores**:
+8. **Implement vLSTM backward pass with tensor cores**:
 
 
 

@@ -86,6 +86,9 @@
  'accessPolicyMaxWindowSize': 134213632,
  'reservedSharedMemPerBlock': 1024}
 
+ ### Constraints
+ - Warps per block: 1536 / 32 = 48
+
  ## A100
 
  {'name': 'NVIDIA A100-SXM4-80GB',
@@ -171,3 +174,6 @@
  'maxBlocksPerMultiProcessor': 32,
  'accessPolicyMaxWindowSize': 134213632,
  'reservedSharedMemPerBlock': 1024}
+
+ ### Constraints
+ - Warps per block = maxThreadsPerMultiProcessor / warpSize = 2048 / 32 = 64
