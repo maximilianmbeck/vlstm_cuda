@@ -21,17 +21,18 @@ Tensor interface::mmkernel(Tensor matA, Tensor matB, Tensor matC) {
         if (std::is_same<scalar_t, at::BFloat16>::value) {
           printf("before kernel dispatch - bfloat16!\n");
           kernel_dispatchers::mmkernel_dispatch<__nv_bfloat16>(
-              reinterpret_cast<float *>(matD.data_ptr<scalar_t>()),
+              reinterpret_cast<float *>(matD.data_ptr<float>()),
               reinterpret_cast<__nv_bfloat16 *>(matA.data_ptr<scalar_t>()),
               reinterpret_cast<__nv_bfloat16 *>(matB.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(matC.data_ptr<scalar_t>()), m, n, k);
+              reinterpret_cast<float *>(matC.data_ptr<float>()), m, n, k);
         } else if (std::is_same<scalar_t, at::Half>::value) {
           printf("before kernel dispatch - float16!\n");
-          kernel_dispatchers::mmkernel_dispatch<__half>(
-              reinterpret_cast<float *>(matD.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(matA.data_ptr<scalar_t>()),
-              reinterpret_cast<__half *>(matB.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(matC.data_ptr<scalar_t>()), m, n, k);
+          // kernel_dispatchers::mmkernel_dispatch<__half>(
+          //     reinterpret_cast<float *>(matD.data_ptr<float>()),
+          //     reinterpret_cast<__half *>(matA.data_ptr<scalar_t>()),
+          //     reinterpret_cast<__half *>(matB.data_ptr<scalar_t>()),
+          //     reinterpret_cast<float *>(matC.data_ptr<float>()), m, n, k);
+          printf("No kernel for this dtype available.\n");
 
         } else {
           printf("No kernel for this dtype available.\n");

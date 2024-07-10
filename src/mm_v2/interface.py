@@ -27,7 +27,9 @@ cppmodule = CppModule.instance()
 def mmkernel(
     mat_A: torch.Tensor, mat_B: torch.Tensor, mat_C: torch.Tensor
 ) -> torch.Tensor:
-    mat_C = mat_C.to(dtype=torch.float32)
+    mat_C = mat_C.to(dtype=torch.float32).contiguous()
+    mat_A = mat_A.contiguous()
+    mat_B = mat_B.contiguous()
     out = cppmodule.mmkernel(mat_A, mat_B, mat_C)
 
     return out
