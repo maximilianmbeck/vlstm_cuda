@@ -266,7 +266,7 @@ __global__ void mmkernel(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
         ((block_pos * BLOCK_ROW_TILES) / N_TILES) * (BLOCK_COL_TILES);
     const unsigned int block_tile_j = (block_pos * BLOCK_COL_TILES) % N_TILES;
 #ifdef DEBUG_ml1
-    if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+    if ((blockIdx.x == 0) && (threadIdx.x == 33)) {
       printf("BIdx: %d, TIdx: %d, wID: %d, lID: %d, block_pos: %d, "
              "block_tile_i: %d, block_tile_j: %d\n",
              blockIdx.x, threadIdx.x, warpId, laneId, block_pos, block_tile_i,

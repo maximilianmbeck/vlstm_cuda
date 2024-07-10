@@ -5,23 +5,23 @@ It aims to show the progress of the different kernels.
 
 ## Kernel versions in chronological order
 
-1. **Kernel structure setup:**
+## 1. **Kernel structure setup:**
 
 - playg_v1:
 - playg_v2: Implement kernel calls from C++ with different dtypes. Setup simple structure. Integrate to PyTorch via pybind11.
 
-2. **Getting to know simple matrix multiplication in CUDA:**
+### 2. **Getting to know simple matrix multiplication in CUDA:**
 
 - matrixMul: matrixMul example from the cuda_samples repo.
 - mm_v0: Bring cuda_sample in our folder structure.
 - mm_v1: Play around with matrix multiplication.
 
-3. **Implement a $QK^\top V$ (double) matrix multiplication without tensor cores**:
+### 3. **Implement a $QK^\top V$ (double) matrix multiplication without tensor cores**
 
 - qkv_v0: First attempt. Wrong computation partitioning. The whole grid was used for single Q and KV tiles. Did not work as we had different parts of the tile in different shared memories of the grid-blocks (streaming multiprocessors).
 - qkv_v1: Second attempt. Now corrected work partitioning. Use one grid block / streaming multiprocessor per Q tile.
 
-4. **Implement vLSTM forward pass without tensor cores**:
+### 4. **Implement vLSTM forward pass without tensor cores**
 
 - vlstm_fw_v0: Build on qkv_v1, make qkv_v1 causal, i.e. compute
 
@@ -33,7 +33,7 @@ where $D$ is a lower triangular matrix (ones) and the upper triangle are zeros.
 - vlstm_fw_v1: Build on vlstm_fw_v0, integrate forget&input gates + normalization. This is the first fused vlstm kernel for the forward pass only.
   - Open **TODO**: Optimize the fgate cumsum computation over the grid iterations. Do not recompute from scratch, but reuse previous computation.
 
-5. **Implement vLSTM backward pass without tensor cores**:
+### 5. **Implement vLSTM backward pass without tensor cores**
 
 - vlstm_fwbw_v0: Build on vlstm_fw_v1, implement the backward pass using the same tiling strategy as FlashAttention2.
   - adapt forward to store the max state and the n state in HBM for reuse in backward.
@@ -120,7 +120,7 @@ Backward:
 | 32    | 32    |  256  |  OOM           |   |
 | 32    | 16    |  256  |  90080         |   |
 
-6. **Implement a Matrix Multiply with Tensor Cores**
+### 6. **Implement a Matrix Multiply with Tensor Cores**
 
 We built on 2 CUDA samples: bf16TensorCoreGemm & cudaTensorCoreGemm
 These samples demonstrate how to use CUDA tensor cores with fp16 and bfloat16.
@@ -130,13 +130,26 @@ These samples demonstrate how to use CUDA tensor cores with fp16 and bfloat16.
 - mm_v3: Matrix multiply with tensor cores, callable from pytorch.
   - **TODO**:
     - implement a pytorch interface for bf16TensorCoreGEMM example (fixed shapes) OK
-    - enable to different shapes
+    - enable to different shapes DO_LATER
   - **WORKLOG**:
 
-7. **Implement vLSTM forward pass with tensor cores**:
+### 7. **Implement vLSTM forward pass with tensor cores**
 
 We continue with the forward kernel from vlstm_fwbw_v1 and integrate tensor cores.
 We do not focus on backward kernel for now, hence only the fw kernel will be modified in vlstm_fwbw_v2.
+
+#### Launch Grid and Tile dimensions
+
+(Use dimensions from ThunderKittens)
+
+- TILE_DIM: 16x16
+- WARPSIZE: 32
+- WARPGROUP_SIZE: 4 (warps)
+- typical number of warps per block: 8 -> 8x32=256 threads
+
+#### Makefile progress
+
+#### Kernel progress
 
 - vlstm_fwbw_v2:
   - **TODOs**:
@@ -145,11 +158,13 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
       - probably impacts occupancy (#blocks used per multiprocessor)
     - Stream 2: Add another loop / tiling dimension along the head dimension to reduce shared memory
   - use float4 / int4 for load/writes to global memory
+  - use Tensor cores, add loop for loading into registers
+  - write a makefile similar to thunderkittens + cuda samples for compiling TODO
+    - the hope is that we see the cuda errors when running it like so.
 
   - **WORKLOG**:
-  - continue later
 
-8. **Implement vLSTM backward pass with tensor cores**:
+### 8. **Implement vLSTM backward pass with tensor cores**
 
 ## CUDA questions
 
@@ -171,6 +186,9 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
 
 - See below: e.g. Total amount of shared memory per block / multiprocessor? What exactly is the difference?
   - See this conversation with ChatGPT: <https://chatgpt.com/share/7a1eef5b-c505-4492-87be-6183193da004>
+  - There can be multiply blocks scheduled on the same streaming multiprocessor (SM). The shared mem per block * blocks scheduled must not exceed the maximum amount of shared memory per multiprocessor.
+  - The maximum shared memory per block is actually given by `sharedMemPerBlockOptin`.
+  - The maximum shared memory per block can be set via `cudaFuncSetAttribute(kernel,cudaFuncAttributeMaxDynamicSharedMemorySize, sharedMemorySize);``(where sharedMemorySize <= sharedMemPerBlockOptin)
 
 ## CUDA Resources
 
