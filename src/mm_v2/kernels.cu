@@ -192,6 +192,9 @@
     }                                                                          \
   } while (0)
 
+#define DEBUG_launch
+#define DEBUG_ml1 // mainloop
+
 // enum kernels {
 //   bf16mma_shmem_gemm_async_copy =
 //       0, // __nv_bfloat16 MMA shmem using kernel with async_copy
@@ -224,6 +227,13 @@ __global__ void mmkernel(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
 #if __CUDA_ARCH__ >= 800
   extern __shared__ __nv_bfloat16 shmem[][CHUNK_K * K + SKEW_BF16];
 
+#ifdef DEBUG_launch
+  if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+    printf("BlockIdx: %d, ThreadIdx: %d, blockDim: %d, gridDim: %d\n",
+           blockIdx.x, threadIdx.x, blockDim.x, gridDim.x);
+  }
+#endif
+
   // Warp and lane identification.
   const unsigned int warpId = threadIdx.x / WARP_SIZE;
   const unsigned int laneId = threadIdx.x % WARP_SIZE;
@@ -255,7 +265,14 @@ __global__ void mmkernel(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
     const unsigned int block_tile_i =
         ((block_pos * BLOCK_ROW_TILES) / N_TILES) * (BLOCK_COL_TILES);
     const unsigned int block_tile_j = (block_pos * BLOCK_COL_TILES) % N_TILES;
-
+#ifdef DEBUG_ml1
+    if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+      printf("BIdx: %d, TIdx: %d, wID: %d, lID: %d, block_pos: %d, "
+             "block_tile_i: %d, block_tile_j: %d\n",
+             blockIdx.x, threadIdx.x, warpId, laneId, block_pos, block_tile_i,
+             block_tile_j);
+    }
+#endif
     // Stop when there are no more D matrix tiles to compute in this CTA.
     if (block_tile_i >= M_TILES) {
       break;
@@ -418,7 +435,7 @@ __global__ void mmkernel(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
     }
 
     __syncthreads();
-  }
+  } // end block_pos
 #endif
 }
 
