@@ -161,8 +161,24 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
   - use Tensor cores, add loop for loading into registers
   - write a makefile similar to thunderkittens + cuda samples for compiling TODO
     - the hope is that we see the cuda errors when running it like so.
-
   - **WORKLOG**:
+    - drop float32 support.
+    - setup kernel constraints.
+
+#### Shared Memory requirements
+
+Not sure wether head dim 256 would fit.
+For the backward pass it might be a problem.
+
+Forward New (only one kvTile):
+|  Qdim | KVdim | hdim  | SRAM in bytes | SRAM in bytes DEBUG |   |
+|---    |---    |---    |---            |---                  |---|
+| 32    | 32    |  64   |               |  20864              |   |
+| 64    | 64    |  64   |  41216        |  49920              |   |
+| 64    | 64    |  128  |  65792        |  74496              |   |
+| 64    | 64    |  160  |  90368        |  99072              |   |
+| 64    | 64    |  192  |  90368        |  99072              |   |
+| 64    | 64    |  256  |  ?????        |  ?????              |   |
 
 ### 8. **Implement vLSTM backward pass with tensor cores**
 
