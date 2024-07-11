@@ -76,19 +76,6 @@ void interface::vlstm_fw(Tensor matH, Tensor vecN, Tensor vecM, Tensor matC,
               reinterpret_cast<__half *>(vecIgp.data_ptr<scalar_t>()),
               reinterpret_cast<__half *>(vecFgp.data_ptr<scalar_t>()),
               batchSize, numHeads, seqLen, dimHeads);
-        } else if (std::is_same<scalar_t, float>::value) {
-          printf("before kernel dispatch - float32!\n");
-          kernel_dispatchers::vlstm_fw_dispatch<float>(
-              reinterpret_cast<float *>(matH.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(vecN.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(vecM.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(matC.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(matQ.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(matK.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(matV.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(vecIgp.data_ptr<scalar_t>()),
-              reinterpret_cast<float *>(vecFgp.data_ptr<scalar_t>()), batchSize,
-              numHeads, seqLen, dimHeads);
         } else {
           printf("No kernel for this dtype available.\n");
         }
