@@ -48,12 +48,15 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #define NUM_WARP_GROUPS 2
 #define WARP_GROUP_SIZE 4
 #define WARP_SIZE 32
+#define NUM_WARPS (NUM_WARP_GROUPS * WARP_GROUP_SIZE)
 
 // we use the float4 load/store instructions to load 4 floats at once
 // we choose the layout such that one warp can load a 8x32 x 2byte tile
 #define GMEM_LOAD_BLOCK_2BITEMS_X 32
 // 4 warps load a 32x32 x 2byte tile
-#define GMEM_LOAD_THREAD_2BITEMS_X 8 // float4 = 16 bytes / 2 bytes per element
+// 8 warps load a 64x32 x 2byte tile
+// TODO make float4 load/store instructions work -> then set to 8
+#define GMEM_LOAD_THREAD_2BITEMS_X 1 // float4 = 16 bytes / 2 bytes per element
 // number of threads in a row to load from global memory:
 #define GMEM_LOAD_WARP_COLS_X (WARP_SIZE / GMEM_LOAD_THREAD_2BITEMS_X)
 #define GMEM_LOAD_WARP_ROWS_Y (WARP_SIZE / GMEM_LOAD_WARP_COLS_X)
@@ -61,8 +64,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // number of thread columns that all threads / warps load from global memory
 #define GMEM_LOAD_BLOCK_COLS_X (GMEM_LOAD_WARP_COLS_X)
 // number of thread rows that all threads / warps load from global memory
-#define GMEM_LOAD_BLOCK_ROWS_Y                                                 \
-  (GMEM_LOAD_WARP_ROWS_Y * WARP_GROUP_SIZE * NUM_WARP_GROUPS)
+#define GMEM_LOAD_BLOCK_ROWS_Y (GMEM_LOAD_WARP_ROWS_Y * NUM_WARPS)
 
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
@@ -87,8 +89,8 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG11 1
 // #define DEBUG12 1
 
-#define DEBUG_GMEMSTREAM1 1
-// #define DEBUG_GMEMSTREAM2 1
+// #define DEBUG_GMEMSTREAM1 1
+#define DEBUG_GMEMSTREAM2 1
 
 // #define DEBUG_fcolval1 1
 // #define DEBUG_fcolval2 1
@@ -316,46 +318,56 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               GMEM_LOAD_BLOCK_2BITEMS_X * qWarpTileXIdx;
 
           // pointer arithmetics: compute the pointer to the block in shared
-          // and global mem in scalar_t (float16, bfloat16) dtype then cast to
-          // float4 for streaming to shared memory
+          // and global mem in scalar_t (float16, bfloat16) dtype
+          // TODO then cast to float4 for streaming to shared memory
 
           scalar_t *qTileWarpBlockSharedMemPtr =
-              (scalar_t *)&qTile +
+              (scalar_t *)qTile +
               (dimHeads + SHARED_MEM_PADDING_TILE) * qWarpBlockSharedMemYIdx +
               qWarpBlockSharedMemXIdx;
 
           // no memory padding for global memory:
           scalar_t *matQTileWarpBlockGlobalMemPtr =
-              (scalar_t *)&matQ + qTileBlockGlobalMemIdx +
+              (scalar_t *)matQ + qTileBlockGlobalMemIdx +
               (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
 
-          //   SMEMARRAY(qTile, dimHeads, qWarpTileThreadSharedMemYIdx,
-          //             qWarpTileThreadSharedMemXIdx) =
-          *(((int4 *)(qTileWarpBlockSharedMemPtr)) + colGmemTidxX) =
-              *(((int4 *)(matQTileWarpBlockGlobalMemPtr)) + colGmemTidxX);
+          *(((scalar_t *)(qTileWarpBlockSharedMemPtr)) + colGmemTidxX) =
+              *(((scalar_t *)(matQTileWarpBlockGlobalMemPtr)) + colGmemTidxX);
 
 #ifdef DEBUG_GMEMSTREAM1
+          const uint qwGmemIdxY =
+              (dimHeads * GMEM_LOAD_BLOCK_ROWS_Y) * qWarpTileYIdx +
+              dimHeads * rowGmemTidxY;
+          const uint qwGmemIdxYprint =
+              (GMEM_LOAD_BLOCK_ROWS_Y)*qWarpTileYIdx + rowGmemTidxY;
+          const uint qwGmemIdxX =
+              GMEM_LOAD_BLOCK_2BITEMS_X * qWarpTileXIdx + colGmemTidxX;
+          const uint qwGmemIdx =
+              qTileBlockGlobalMemIdx + qwGmemIdxY + qwGmemIdxX;
           if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
               ((threadIdx.x == 0) || (threadIdx.x == 1) || (threadIdx.x == 8) ||
                (threadIdx.x == 9))) {
             printf(
                 "Bxy(%d,%d),Tidx:%d,w-l:%d-%d|rgTidXY(%d,%d)|qIdx(%d): "
-                "qWTLoopXY(%d,%d),qWTSmemXY(%d,%d): smem=%f\n",
+                "qWTLoopXY(%d,%d),qWTSmemXY(%d,%d): gmemXY(%d,%d)=%f, "
+                "smemXY(%d,%d)=%f, gmemptr=%f\n",
                 blockIdx.x, blockIdx.y, threadIdx.x, warpId, laneId,
                 colGmemTidxX, rowGmemTidxY, qTileIdx, qWarpTileXIdx,
                 qWarpTileYIdx, qWarpBlockSharedMemXIdx, qWarpBlockSharedMemYIdx,
+                qwGmemIdxX, qwGmemIdxYprint, type2float(matQ[qwGmemIdx]),
+                qWarpBlockSharedMemXIdx + colGmemTidxX, qWarpBlockSharedMemYIdx,
                 type2float(SMEMARRAY(qTile, dimHeads, qWarpBlockSharedMemYIdx,
-                                     qWarpBlockSharedMemXIdx + colGmemTidxX)));
-            // type2float(*matQTileWarpBlockGlobalMemPtr));
+                                     qWarpBlockSharedMemXIdx + colGmemTidxX)),
+                type2float(*matQTileWarpBlockGlobalMemPtr));
           }
 #endif
         }
       }
       __syncthreads(); // TODO: necessary?
 
+#ifdef DEBUG_GMEMSTREAM2
       //! DEBUG: write hTile to global memory (has the same memory index as
       //! qTile)
-
       for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
            ++qWarpTileYIdx) {
         for (uint qWarpTileXIdx = 0; qWarpTileXIdx < qWarpTileXEnd;
@@ -364,55 +376,26 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           //* shared memory:
           const uint qWarpBlockSharedMemYIdx =
               GMEM_LOAD_BLOCK_ROWS_Y * qWarpTileYIdx + rowGmemTidxY;
-          // Note: the WarpBlockSharedMemXIdx is left out as we add it
-          // after casting to float4 to have the correct offset
+
           const uint qWarpBlockSharedMemXIdx =
               GMEM_LOAD_BLOCK_2BITEMS_X * qWarpTileXIdx;
 
-          //* global memory:
-          // left upper corner of qTileBlock in Q(batchHead)[seqLen][dimHeads]
-          // (global memory)
-          //   const uint qWarpTileBlockGlobalMemIdx =
-          //       qTileBlockGlobalMemIdx +
-          //       (dimHeads * GMEM_LOAD_BLOCK_2BITEMS_X) * qWarpTileYIdx +
-          //       GMEM_LOAD_BLOCK_2BITEMS_X * qWarpTileXIdx;
-          //   const uint qWarpTileThreadGlobalMemIdx =
-          //   qWarpTileBlockGlobalMemIdx +
-          //                                            dimHeads * rowGmemTidxY
-          //                                            + rowGmemTidxY;
-
-          // pointer arithmetics: compute the pointer to the block in shared
-          // and global mem in scalar_t (float16, bfloat16) dtype then cast to
-          // float4 for streaming to shared memory
-
           scalar_t *qTileWarpBlockSharedMemPtr =
-              (scalar_t *)&qTile +
+              (scalar_t *)qTile +
               (dimHeads + SHARED_MEM_PADDING_TILE) * qWarpBlockSharedMemYIdx +
               qWarpBlockSharedMemXIdx;
 
           // no memory padding for global memory:
           scalar_t *matHTileWarpBlockGlobalMemPtr =
-              (scalar_t *)&matH + qTileBlockGlobalMemIdx +
+              (scalar_t *)matH + qTileBlockGlobalMemIdx +
               (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
 
-          *(((int4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
-              *(((int4 *)(qTileWarpBlockSharedMemPtr)) + colGmemTidxX);
-
-#ifdef DEBUG_GMEMSTREAM2
-          if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
-              ((threadIdx.x == 0) || (threadIdx.x == 1) || (threadIdx.x == 8) ||
-               (threadIdx.x == 9))) {
-            printf("Bxy(%d,%d),Tidx:%d,w-l:%d-%d|rgTidXY(%d,%d)|qIdx(%d): "
-                   "qWTLoopXY(%d,%d), qWTSmemXY(%d,%d)\n",
-                   blockIdx.x, blockIdx.y, threadIdx.x, warpId, laneId,
-                   colGmemTidxX, rowGmemTidxY, qTileIdx, qWarpTileXIdx,
-                   qWarpTileYIdx, qWarpBlockSharedMemXIdx,
-                   qWarpBlockSharedMemYIdx);
-          }
-#endif
+          *(((scalar_t *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
+              *(((scalar_t *)(qTileWarpBlockSharedMemPtr)) + colGmemTidxX);
         }
       }
       __syncthreads(); // TODO: necessary?
+#endif
 
 #ifdef INCLUDE1
       //! write hTile to global memory (has the same memory index as qTile)
@@ -1354,6 +1337,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(
     int dimHeads) {
   printf("B: %d, NH: %d, S: %d, DH: %d\n", batchSize, numHeads, seqLen,
          dimHeads);
+  printf("NUM_WARPS:%d, GMEM_LOAD_BLOCK_COLS_X:%d, GMEM_LOAD_BLOCK_ROWS_Y:%d\n",
+         NUM_WARPS, GMEM_LOAD_BLOCK_COLS_X, GMEM_LOAD_BLOCK_ROWS_Y);
   const int TblockDim = TBLOCK_DIM; // matmul blockdim
   const int QtileDim = QTILE_DIM;   // blockdim for Q along seqLen dim
   const int KVtileDim = KVTILE_DIM; // blockdim for K&V along seqLen dim

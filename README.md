@@ -164,6 +164,7 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
   - **WORKLOG**:
     - drop float32 support.
     - setup kernel constraints.
+    - load qTile from global to shared mem with warps. float4 loading not working! Why?
 
 #### Shared Memory requirements
 
@@ -205,6 +206,10 @@ Forward New (only one kvTile):
   - There can be multiply blocks scheduled on the same streaming multiprocessor (SM). The shared mem per block * blocks scheduled must not exceed the maximum amount of shared memory per multiprocessor.
   - The maximum shared memory per block is actually given by `sharedMemPerBlockOptin`.
   - The maximum shared memory per block can be set via `cudaFuncSetAttribute(kernel,cudaFuncAttributeMaxDynamicSharedMemorySize, sharedMemorySize);``(where sharedMemorySize <= sharedMemPerBlockOptin)
+
+**Load from Global to Shared Memory**:
+
+- float4/int4 loading not working - why??
 
 ## CUDA Resources
 
