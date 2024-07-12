@@ -207,9 +207,14 @@ Forward New (only one kvTile):
   - The maximum shared memory per block is actually given by `sharedMemPerBlockOptin`.
   - The maximum shared memory per block can be set via `cudaFuncSetAttribute(kernel,cudaFuncAttributeMaxDynamicSharedMemorySize, sharedMemorySize);``(where sharedMemorySize <= sharedMemPerBlockOptin)
 
-**Load from Global to Shared Memory**:
+**Memory (Global & Shared)**:
 
-- float4/int4 loading not working - why??
+- float4/int4 loading not working - why?? -> **SOLVED**
+  - Problem was the Shared Memory Padding < 16 bytes, which caused the float4/int4
+    reads and writes to be misaligned resulting in a crashing kernel.
+
+- How should I layout the "Chunks" Vectors in Memory. How much padding should I use?
+  - I do not want to "waste" too much shared memory with padding.
 
 ## CUDA Resources
 
