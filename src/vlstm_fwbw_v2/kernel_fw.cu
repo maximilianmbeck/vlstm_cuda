@@ -56,7 +56,8 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // 4 warps load a 32x32 x 2byte tile
 // 8 warps load a 64x32 x 2byte tile
 // TODO make float4 load/store instructions work -> then set to 8
-#define GMEM_LOAD_THREAD_2BITEMS_X 1 // float4 = 16 bytes / 2 bytes per element
+#define GMEM_LOAD_THREAD_2BITEMS_X                                             \
+  8 // 1 // float4 = 16 bytes / 2 bytes per element
 // number of threads in a row to load from global memory:
 #define GMEM_LOAD_WARP_COLS_X (WARP_SIZE / GMEM_LOAD_THREAD_2BITEMS_X)
 #define GMEM_LOAD_WARP_ROWS_Y (WARP_SIZE / GMEM_LOAD_WARP_COLS_X)
@@ -69,9 +70,12 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
 // shared memory padding for 2D tiles / arrays in shared memory
-#define SHARED_MEM_PADDING_TILE 4
+//! In order for float4/int4 accesses to be aligned, padding must be 16 bytes
+// otherwise kernel will crash
+#define SHARED_MEM_PADDING_TILE 16
 // shared memory padding for 1D vectors in shared memory
-#define SHARED_MEM_PADDING_CHUNK 4
+// TODO find correct padding here
+#define SHARED_MEM_PADDING_CHUNK 8
 
 // SMEMARRAY: access shared memory array (2D)
 #define SMEMARRAY(array, stride, row, col)                                     \
@@ -331,8 +335,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               (scalar_t *)matQ + qTileBlockGlobalMemIdx +
               (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
 
-          *(((scalar_t *)(qTileWarpBlockSharedMemPtr)) + colGmemTidxX) =
-              *(((scalar_t *)(matQTileWarpBlockGlobalMemPtr)) + colGmemTidxX);
+          *(((float4 *)(qTileWarpBlockSharedMemPtr)) + colGmemTidxX) =
+              *(((float4 *)(matQTileWarpBlockGlobalMemPtr)) + colGmemTidxX);
 
 #ifdef DEBUG_GMEMSTREAM1
           const uint qwGmemIdxY =
@@ -390,83 +394,16 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               (scalar_t *)matH + qTileBlockGlobalMemIdx +
               (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
 
-          *(((scalar_t *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
-              *(((scalar_t *)(qTileWarpBlockSharedMemPtr)) + colGmemTidxX);
+          *(((float4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
+              *(((float4 *)(qTileWarpBlockSharedMemPtr)) + colGmemTidxX);
         }
       }
       __syncthreads(); // TODO: necessary?
 #endif
 
 #ifdef INCLUDE1
-      //! write hTile to global memory (has the same memory index as qTile)
-      // loops over hTile rows (outer) and columns (inner)
-      const uint hWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-      const uint hWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
-      for (uint hWarpTileYIdx = 0; hWarpTileYIdx < hWarpTileYEnd;
-           ++hWarpTileYIdx) {
-        for (uint hWarpTileXIdx = 0; hWarpTileXIdx < hWarpTileXEnd;
-             ++hWarpTileXIdx) {
-
-          //? cTileIdxes
-          //* shared memory:
-          const uint hWarpTileThreadSharedMemYIdx =
-              blockDim.y * hWarpTileYIdx + threadIdx.y;
-          const uint hWarpTileThreadSharedMemXIdx =
-              blockDim.x * hWarpTileXIdx + threadIdx.x;
-          //* global memory:
-          // left upper corner of cWarpTileBlock in C (global memory)
-          const uint hWarpTileBlockGlobalMemIdx =
-              qTileBlockGlobalMemIdx + (dimHeads * blockDim.y) * hWarpTileYIdx +
-              blockDim.x * hWarpTileXIdx;
-          const uint hWarpTileThreadGlobalMemIdx =
-              hWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
-
-          matH[hWarpTileThreadGlobalMemIdx] =
-              SMEMARRAY(qTile, dimHeads, hWarpTileThreadSharedMemYIdx,
-                        hWarpTileThreadSharedMemXIdx);
-        }
-      }
-      __syncthreads();
-
-      //! qTile Loading
-      // loops over rows (outer) and columns (inner) of qTile
-      const uint qWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-      const uint qWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
-      for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
-           ++qWarpTileYIdx) {
-        for (uint qWarpTileXIdx = 0; qWarpTileXIdx < qWarpTileXEnd;
-             ++qWarpTileXIdx) {
-          //? qWarpTileIdxes
-          //* shared memory:
-          const uint qWarpTileThreadSharedMemYIdx =
-              blockDim.y * qWarpTileYIdx + threadIdx.y;
-          const uint qWarpTileThreadSharedMemXIdx =
-              blockDim.x * qWarpTileXIdx + threadIdx.x;
-          //* global memory:
-          // left upper corner of qTileBlock in Q (global memory)
-          const uint qWarpTileBlockGlobalMemIdx =
-              qTileBlockGlobalMemIdx + (dimHeads * blockDim.y) * qWarpTileYIdx +
-              blockDim.x * qWarpTileXIdx;
-          const uint qWarpTileThreadGlobalMemIdx =
-              qWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y + threadIdx.x;
-
-          SMEMARRAY(qTile, dimHeads, qWarpTileThreadSharedMemYIdx,
-                    qWarpTileThreadSharedMemXIdx) =
-              matQ[qWarpTileThreadGlobalMemIdx];
-
-#ifdef DEBUG3
-          if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
-              (threadIdx.y == 0)) {
-            printf("qTile[%d][%d] = %f\n", qWarpTileThreadSharedMemYIdx,
-                   qWarpTileThreadSharedMemXIdx,
-                   type2float(qTile[qWarpTileThreadSharedMemYIdx]
-                                   [qWarpTileThreadSharedMemXIdx]));
-          }
-#endif
-        }
-      }
-      __syncthreads(); // TODO: necessary?
-
+      // TODO make this more efficient by combining PrevChunk and Chunk
+      // and then iterate over 2*QTileDim at once
       //! init mPrevChunk to -inf,
       //! init lPrevChunk to 0, init nPrevChunk to 0
       // Y: seqLen (or QtileDim), X: 1 (fTileCol has only Y dimension)
@@ -1408,12 +1345,10 @@ void kernel_dispatchers::vlstm_fw_dispatch(
       2 * cdTileSharedMemSize + iChunkSharedMemSize + fChunkSharedMemSize +
       fTileColSharedMemSize + 6 * nmlChunkSharedMemSize;
 
-  const uint sharedMemorySizeReal = sharedMemorySize - cdTileSharedMemSize;
-
   printf("blocksxy: %d-%d, threadsxy: %d-%d, QtileDim: %d, KVtileDim: %d, "
-         "shared_mem in bytes (DEBUG): %d, shared_mem in bytes (REAL): %d\n",
+         "shared_mem in bytes: %d\n",
          gridDims.x, gridDims.y, blockDims.x, blockDims.y, QTILE_DIM, KVtileDim,
-         sharedMemorySize, sharedMemorySizeReal);
+         sharedMemorySize);
   // cudaSetDevice(0);
 
   cudaStream_t stream;
@@ -1450,9 +1385,6 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   cudaStreamSynchronize(stream);
   cudaStreamDestroy(stream);
   gpuErrchk(cudaDeviceSynchronize());
-
-  // gpuErrchk(cudaPeekAtLastError());
-  // gpuErrchk(cudaDeviceSynchronize());
 }
 
 // this is needed to make sure that the compiler instantiates the template
