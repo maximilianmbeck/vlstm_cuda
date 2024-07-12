@@ -5,7 +5,7 @@ It aims to show the progress of the different kernels.
 
 ## Kernel versions in chronological order
 
-## 1. **Kernel structure setup:**
+### 1. **Kernel structure setup:**
 
 - playg_v1:
 - playg_v2: Implement kernel calls from C++ with different dtypes. Setup simple structure. Integrate to PyTorch via pybind11.
@@ -157,14 +157,22 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
     - Stream 1: Use cudaFuncAttributeMaxDynamicSharedMemorySize to set the possible sharedMemPerBlockOptin. See how large we can make the tiles.
       - probably impacts occupancy (#blocks used per multiprocessor)
     - Stream 2: Add another loop / tiling dimension along the head dimension to reduce shared memory
-  - use float4 / int4 for load/writes to global memory
+  - use float4 / int4 for load/writes to global memory DONE
   - use Tensor cores, add loop for loading into registers
   - write a makefile similar to thunderkittens + cuda samples for compiling TODO
     - the hope is that we see the cuda errors when running it like so.
+
+  - **Implementation Steps**:
+    1. Implement all read/writes from/to global memory
+    2. Implement $S = QK^T$ with tensor cores
+    3. Implement $H = S V$ with tensor cores
+    4. Make matrix product causal
+    5. Bring back the Gate matrix $D$
+  
   - **WORKLOG**:
     - drop float32 support.
     - setup kernel constraints.
-    - load qTile from global to shared mem with warps. float4 loading not working! Why?
+    - load qTile from global to shared mem with warps with float4, needed to set correct shared mem padding.
 
 #### Shared Memory requirements
 
