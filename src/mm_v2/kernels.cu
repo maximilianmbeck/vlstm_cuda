@@ -193,7 +193,8 @@
   } while (0)
 
 #define DEBUG_launch
-#define DEBUG_ml1 // mainloop
+// #define DEBUG_ml1 1    // mainloop
+// #define DEBUG_matmul1 1 // matmul
 
 // enum kernels {
 //   bf16mma_shmem_gemm_async_copy =
@@ -396,13 +397,21 @@ __global__ void mmkernel(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
               wmma::load_matrix_sync(b[j], tile_ptr, K * CHUNK_K + SKEW_BF16);
             }
 
+#ifdef DEBUG_matmul1
+            if ((blockIdx.x == 0) && (threadIdx.x == 0)) {
+              printf("BIdx:%d,TIdx:%d,wID:%d,lID:%d,bpos:%d, "
+                     "btile_i:%d,btile_j:%d||tilek:%d,kstep:%d,i:%d,j:%d\n",
+                     blockIdx.x, threadIdx.x, warpId, laneId, block_pos,
+                     block_tile_i, block_tile_j, tile_k, k_step, i, j);
+            }
+#endif
             wmma::mma_sync(c[i][j], a[i], b[j], c[i][j]);
-          }
-        }
-      }
+          } // end loop: j
+        }   // end loop: i
+      }     // end loop: k_step
 
       __syncthreads();
-    }
+    } // end loop: tile_k
 
     // Store the D fragments to shared memory.
 #pragma unroll

@@ -373,12 +373,12 @@ __global__ void compute_bf16gemm(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
             }
 
             wmma::mma_sync(c[i][j], a[i], b[j], c[i][j]);
-          }
-        }
-      }
+          } // end loop: j
+        }   // end loop: i
+      }     // end loop: k_step
 
       __syncthreads();
-    }
+    } // end loop: tile_k
 
     // Store the D fragments to shared memory.
 #pragma unroll
@@ -411,7 +411,7 @@ __global__ void compute_bf16gemm(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
     }
 
     __syncthreads();
-  }
+  } // end loop: block_pos
 #endif
 }
 

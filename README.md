@@ -163,8 +163,8 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
     - the hope is that we see the cuda errors when running it like so.
 
   - **Implementation Steps**:
-    1. Implement all read/writes from/to global memory
-    2. Implement $S = QK^T$ with tensor cores
+    1. Implement all read/writes from/to global memory DONE
+    2. Implement $S = QK^T$ with tensor cores IN PROGRESS
     3. Implement $H = S V$ with tensor cores
     4. Make matrix product causal
     5. Bring back the Gate matrix $D$

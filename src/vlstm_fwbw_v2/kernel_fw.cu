@@ -11,6 +11,7 @@
 #include <cuda_runtime_api.h>
 #include <driver_types.h>
 #include <math_constants.h>
+#include <mma.h>
 
 #include "../util/cuda_errorcheck.h"
 #include "../util/inline_ops.cuh"
@@ -26,9 +27,11 @@ namespace vlstm {
 
 namespace cg = cooperative_groups;
 
+namespace nv = nvcuda;
+
 namespace kernels {
 
-template <typename scalar_t, int TblockDim, int QblockDim, int KVblockDim>
+template <typename scalar_t, int QblockDim, int KVblockDim>
 __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                          scalar_t *matC, scalar_t *matQ, scalar_t *matK,
                          scalar_t *matV, scalar_t *iGatePreact,
@@ -38,17 +41,34 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 } // namespace kernels
 
 ////////////////////////////////////////////////////////////////////////////////////////
+// GPU SPECIFIC
+#define WARP_SIZE 32
+// combine 4 warps to a group
+#define WARP_GROUP_SIZE 4
+//
 
-#define TBLOCK_DIM 16 // TblockDim: corresponds to BLOCK_DIM in matmul
+// Tensor Core MxN = QTCxKVC dimensions (K is always 16)
+#define QTC_DIM 16  // M
+#define KVTC_DIM 16 // N
+#define KTC_DIM 16  // K
+//
+
+// SHMEM TILE DIMENSIONS
 #define KVTILE_DIM 64 // KVtileDim: TileDim for K&V along seqLen dim
 // QTILE_DIM must be divisible by KVTILE_DIM and TBLOCK_DIM,
 // KVTILE_DIM <= QTILE_DIM
 #define QTILE_DIM 64 // QtileDim: TileDim for Q along seqLen dim
+//
 
-#define NUM_WARP_GROUPS 2
-#define WARP_GROUP_SIZE 4
-#define WARP_SIZE 32
+// WARP SETUP
+#define NUM_WARP_GROUPS (QTILE_DIM / (WARP_GROUP_SIZE * QTC_DIM))
 #define NUM_WARPS (NUM_WARP_GROUPS * WARP_GROUP_SIZE)
+//
+
+// MM (Matrix Multiply) SETUP
+#define NUM_KDIM_FRAGMENTS_A 1
+#define NUM_KDIM_FRAGMENTS_B 1
+//
 
 // we use the float4 load/store instructions to load 4 floats at once
 // we choose the layout such that one warp can load a 8x32 x 2byte tile
@@ -67,6 +87,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // number of thread rows that all threads / warps load from global memory
 #define GMEM_LOAD_BLOCK_ROWS_Y (GMEM_LOAD_WARP_ROWS_Y * NUM_WARPS)
 
+// SHARED MEM SETUP & PADDING
 // shared memory must be aligned: depends on scalar_t (multiples of 4 should be
 // fine for bf16, fp16 and fp32)
 // shared memory padding for 2D tiles / arrays in shared memory
@@ -76,6 +97,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // shared memory padding for 1D vectors in shared memory
 // TODO find correct padding here
 #define SHARED_MEM_PADDING_CHUNK 4
+//
 
 // SMEMARRAY: access shared memory array (2D)
 #define SMEMARRAY(array, stride, row, col)                                     \
@@ -98,7 +120,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_GMEMSTREAM3 1
 // #define DEBUG_GMEMSTREAM4 1
 // #define DEBUG_GMEMSTREAM5 1
-#define DEBUG_GMEMSTREAM6 1
+// #define DEBUG_GMEMSTREAM6 1
 
 // #define DEBUG_fcolval1 1
 // #define DEBUG_fcolval2 1
@@ -111,10 +133,10 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_hsout1 1
 // #define DEBUG_hsout2 1
 
-#define OUTPUT_matD 1
-// #define OUTPUT_matS 1
+// #define OUTPUT_matD 1
+#define OUTPUT_matS 1
 
-// #define INCLUDE1 1
+#define COMPUTE_QK_TENSORCORE 1
 
 // #define INCL_DMAT_COMP 1
 
@@ -126,7 +148,7 @@ Conventions:
 
 /* vLSTM Forward Kernel v0 */
 
-template <typename scalar_t, int TblockDim, int QtileDim, int KVtileDim>
+template <typename scalar_t, int QtileDim, int KVtileDim>
 __global__ void
 kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   scalar_t *matC, scalar_t *matQ, scalar_t *matK,
@@ -147,8 +169,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #ifdef DEBUG
   if ((blockIdx.x == 0) && (blockIdx.y == 0) && (threadIdx.x == 0) &&
       (threadIdx.y == 0)) {
-    printf("In FW-Kernel: QtileDim: %d, KVtileDim: %d, TblockDim:%d\n",
-           QtileDim, KVtileDim, TblockDim);
+    printf("In FW-Kernel: QtileDim: %d, KVtileDim: %d\n", QtileDim, KVtileDim);
   }
 #endif
   cg::grid_group gridGroup = cg::this_grid();
@@ -959,6 +980,40 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
 #endif
 
+#ifdef COMPUTE_QK_TENSORCORE
+        //! compute S = (Q x K^T) with Tensor Cores
+        // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
+
+        // Four looplevels: QTileDim, dimHeads, KVtileDim
+        // KVtileDim outer: loop over columns of kTile over a warpgroup
+        // -> Note: we need this outermost loop as for 8 warps we cannot fit the
+        // whole KV rows into registers
+        // dimHeads: loop over columns of qTile and rows of kTile
+        // QTileDim: loop over rows of qTile
+        // KVtileDim inner: loop over columns of kTile within a warpgroup
+        const uint kvDimOuterEnd =
+            CEIL_DIV(KVtileDim, KVTC_DIM * WARP_GROUP_SIZE);
+        const uint qDimEnd = CEIL_DIV(QtileDim, QTC_DIM * NUM_WARPS);
+        const uint kvDimInnerEnd = WARP_GROUP_SIZE;
+        const uint dimHeadsEnd = CEIL_DIV(dimHeads, KTC_DIM);
+
+        // TODO from here
+        // kvdim outer loop
+
+        // S fragment accumulators
+        nv::wmma::fragment<nv::wmma::accumulator, QTC_DIM, KVTC_DIM, KTC_DIM,
+                           float>
+            s[NUM_WARPS];
+
+        // TODO where this
+        // dimheads loops
+
+        // qDim loop
+
+        // kvDim inner loop
+
+#else
+
         //! compute S = (Q x K^T)
         // (QtileDim,KVtileDim) = (QtileDim,dimHeads) x (dimHeads,KVtileDim)
         // loops over cTile rows (outer) and columns (inner)
@@ -1024,6 +1079,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           }
         }
 
+#endif // COMPUTE_QK_TENSORCORE
 #ifdef OUTPUT_matS
         //! DEBUG only: write sTile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
@@ -1388,36 +1444,35 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       // number of iterations for each block
       //   gridGroup.sync();
 
-      //   //! write hTile to global memory (has the same memory index as qTile)
-      //   // loops over hTile rows (outer) and columns (inner)
-      //   const uint hWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
-      //   const uint hWarpTileXEnd = CEIL_DIV(dimHeads, blockDim.x);
-      //   for (uint hWarpTileYIdx = 0; hWarpTileYIdx < hWarpTileYEnd;
-      //        ++hWarpTileYIdx) {
-      //     for (uint hWarpTileXIdx = 0; hWarpTileXIdx < hWarpTileXEnd;
-      //          ++hWarpTileXIdx) {
+      //! Store hTile to global memory
+      // see qTile write to global memory for reference
+      for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
+           ++qWarpTileYIdx) {
+        for (uint qWarpTileXIdx = 0; qWarpTileXIdx < qWarpTileXEnd;
+             ++qWarpTileXIdx) {
+          //? qWarpTileIdxes
+          //* shared memory:
+          const uint qWarpBlockSharedMemYIdx =
+              GMEM_LOAD_BLOCK_ROWS_Y * qWarpTileYIdx + rowGmemTidxY;
 
-      //       //? cTileIdxes
-      //       //* shared memory:
-      //       const uint hWarpTileThreadSharedMemYIdx =
-      //           blockDim.y * hWarpTileYIdx + threadIdx.y;
-      //       const uint hWarpTileThreadSharedMemXIdx =
-      //           blockDim.x * hWarpTileXIdx + threadIdx.x;
-      //       //* global memory:
-      //       // left upper corner of cWarpTileBlock in C (global memory)
-      //       const uint hWarpTileBlockGlobalMemIdx =
-      //           qTileBlockGlobalMemIdx + (dimHeads * blockDim.y) *
-      //           hWarpTileYIdx + blockDim.x * hWarpTileXIdx;
-      //       const uint hWarpTileThreadGlobalMemIdx =
-      //           hWarpTileBlockGlobalMemIdx + dimHeads * threadIdx.y +
-      //           threadIdx.x;
+          const uint qWarpBlockSharedMemXIdx =
+              GMEM_LOAD_BLOCK_2BITEMS_X * qWarpTileXIdx;
 
-      //       matH[hWarpTileThreadGlobalMemIdx] =
-      //           SMEMARRAY(hTile, dimHeads, hWarpTileThreadSharedMemYIdx,
-      //                     hWarpTileThreadSharedMemXIdx);
-      //     }
-      //   }
-      //   __syncthreads();
+          scalar_t *hTileWarpBlockSharedMemPtr =
+              (scalar_t *)hTile +
+              (dimHeads + SHARED_MEM_PADDING_TILE) * qWarpBlockSharedMemYIdx +
+              qWarpBlockSharedMemXIdx;
+
+          // no memory padding for global memory:
+          scalar_t *matHTileWarpBlockGlobalMemPtr =
+              (scalar_t *)matH + qTileBlockGlobalMemIdx +
+              (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
+
+          *(((float4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
+              *(((float4 *)(hTileWarpBlockSharedMemPtr)) + colGmemTidxX);
+        }
+      }
+      __syncthreads(); // TODO: necessary?
 
       //* global memory:
       const uint nmChunkGridXYGlobalMemIdx =
@@ -1465,7 +1520,6 @@ void kernel_dispatchers::vlstm_fw_dispatch(
          dimHeads);
   printf("NUM_WARPS:%d, GMEM_LOAD_BLOCK_COLS_X:%d, GMEM_LOAD_BLOCK_ROWS_Y:%d\n",
          NUM_WARPS, GMEM_LOAD_BLOCK_COLS_X, GMEM_LOAD_BLOCK_ROWS_Y);
-  const int TblockDim = TBLOCK_DIM; // matmul blockdim
   const int QtileDim = QTILE_DIM;   // blockdim for Q along seqLen dim
   const int KVtileDim = KVTILE_DIM; // blockdim for K&V along seqLen dim
 
@@ -1550,7 +1604,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   gpuErrchk(cudaMalloc((void **)&fTileColLast, fTileColLastGlobalMemSize));
   gpuErrchk(cudaMemset(fTileColLast, 0, fTileColLastGlobalMemSize));
 
-  auto kernel = kernels::vlstm_fw<scalar_t, TblockDim, QtileDim, KVtileDim>;
+  auto kernel = kernels::vlstm_fw<scalar_t, QtileDim, KVtileDim>;
   cudaFuncSetAttribute(kernel, cudaFuncAttributePreferredSharedMemoryCarveout,
                        cudaSharedmemCarveoutMaxShared);
   cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize,
