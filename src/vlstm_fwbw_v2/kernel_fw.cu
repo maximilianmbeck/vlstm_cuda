@@ -48,9 +48,9 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 //
 
 // Tensor Core MxN = QTCxKVC dimensions (K is always 16)
-#define QTC_DIM 16  // M
-#define KVTC_DIM 16 // N
-#define KTC_DIM 16  // K
+#define QTC_DIM 16   // M
+#define KVTC_DIM 16  // N
+#define DHKTC_DIM 16 // K
 //
 
 // SHMEM TILE DIMENSIONS
@@ -135,7 +135,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define OUTPUT_matD 1
 #define OUTPUT_matS 1
 
-#define COMPUTE_QK_TENSORCORE 1
+// #define COMPUTE_QK_TENSORCORE 1
 
 // #define INCL_DMAT_COMP 1
 
@@ -191,23 +191,23 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       (scalar_t *)&qTile[QtileDim * (dimHeads + SHARED_MEM_PADDING_TILE)];
 
   //? for intermediate results
+  // init result hTile (QTileDim x dimHeads) in shared memory
+  scalar_t *hTile =
+      (scalar_t *)&kvTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING_TILE)];
   // init cTile (QtileDim x KVTileDim) in shared memory for intermediate
   // result of QK^T
   // TODO initialize cTile to 0
-  scalar_t *cTile =
-      (scalar_t *)&kvTile[KVtileDim * (dimHeads + SHARED_MEM_PADDING_TILE)];
-  // init result hTile (QTileDim x dimHeads) in shared memory
-  scalar_t *hTile =
-      (scalar_t *)&cTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING_TILE)];
+  float *cTile =
+      (float *)&hTile[QtileDim * (dimHeads + SHARED_MEM_PADDING_TILE)];
   // init dTile (QTileDim x KVTileDim) in shared memory for forget and input
   // gate matrix
   scalar_t *dTile =
-      (scalar_t *)&hTile[QtileDim * (dimHeads + SHARED_MEM_PADDING_TILE)];
+      (scalar_t *)&cTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING_TILE)];
 
   //? for input and forget gate
   // init iChunk (KVTileDim x 1) in shared memory for input gate
   scalar_t *iChunk =
-      (scalar_t *)&dTile[QtileDim * (dimHeads + SHARED_MEM_PADDING_TILE)];
+      (scalar_t *)&dTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING_TILE)];
   // init fChunk (QTileDim x 1) in shared memory for forget gate
   scalar_t *fChunk =
       (scalar_t *)&iChunk[KVtileDim * (1 + SHARED_MEM_PADDING_CHUNK)];
@@ -992,50 +992,90 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         // over columns of kTile within a warpgroup
 
         const uint qDimEnd = CEIL_DIV(QtileDim, QTC_DIM * NUM_WARPS);
-        const uint dimHeadsQBlockEnd = CEIL_DIV(dimHeads, KTC_DIM);
+        const uint dimHeadsQBlockEnd = CEIL_DIV(dimHeads, DHKTC_DIM);
 
         // qDim loop (parallelize over warps)
         for (uint qDimIdx = 0; qDimIdx < qDimEnd; ++qDimIdx) {
           // S fragment accumulators per warp
-          nv::wmma::fragment<nv::wmma::accumulator, QTC_DIM, KVTC_DIM, KTC_DIM,
-                             float>
+          nv::wmma::fragment<nv::wmma::accumulator, QTC_DIM, KVTC_DIM,
+                             DHKTC_DIM, float>
               sFrag[NUM_KV_DIM_TILES];
 
-          nv::wmma::fragment<nv::wmma::matrix_a, QTC_DIM, KVTC_DIM, KTC_DIM,
+          nv::wmma::fragment<nv::wmma::matrix_a, QTC_DIM, KVTC_DIM, DHKTC_DIM,
                              scalar_t, nv::wmma::row_major>
               qFrag;
 
-          // init sFrags to zero
-          for (uint kvDimIdx = 0; kvDimIdx < NUM_KV_DIM_TILES; ++kvDimIdx)
+          // define shared mem warp pointer to qTile
+          scalar_t *qTileWarpBlockSharedMemPtr =
+              (scalar_t *)qTile +
+              (dimHeads + SHARED_MEM_PADDING_TILE) * QTC_DIM * NUM_WARPS *
+                  qDimIdx +
+              (dimHeads + SHARED_MEM_PADDING_TILE) * QTC_DIM * warpId;
+
+          //* (warp) offset Y-axis in S = Q*K^T
+          const uint sTileWarpYIdx =
+              cTileBlockYIdx + QTC_DIM * NUM_WARPS * qDimIdx + QTC_DIM * warpId;
+
+          // kvdim loop
+          for (uint kvDimIdx = 0; kvDimIdx < NUM_KV_DIM_TILES; ++kvDimIdx) {
+            // init sFrags to zero
             nv::wmma::fill_fragment(sFrag[kvDimIdx], 0.0f);
 
-          // TODO determine kvDimInnerEnd based on globalIdx
-          const uint kvDimEnd = NUM_KV_DIM_TILES; // CEIL_DIV(KVtileDim,
-                                                  // KVTC_DIM);
-          // kvdim loop
-          for (uint kvDimIdx = 0; kvDimIdx < kvDimEnd; ++kvDimIdx) {
+            //* (warp) offset X-axis in S = Q*K^T
+            const uint sTileWarpXIdx = cTileBlockXIdx + KVTC_DIM * kvDimIdx;
 
-            // slide along dimHeads in qTile and kTile
-            for (uint dimHeadsIdx = 0; dimHeadsIdx < dimHeadsQBlockEnd;
-                 ++dimHeadsIdx) {
+            //! check for causality here
+            // compute only the lower triangle (below main diagonal) of S =
+            // Q*K^T
+            if (sTileWarpXIdx <= sTileWarpYIdx) {
+              // slide along dimHeads in qTile and kTile
+              for (uint dimHeadsIdx = 0; dimHeadsIdx < dimHeadsQBlockEnd;
+                   ++dimHeadsIdx) {
 
-              if (dimHeadsIdx == 0) {
-                nv::wmma::load_matrix_sync(qFrag, POINTER, STRIDE);
-              }
+                //* (warp) shared mem pointers
+                scalar_t *qFragmentWarpSharedMemPtr =
+                    qTileWarpBlockSharedMemPtr + DHKTC_DIM * dimHeadsIdx;
 
-              nv::wmma::fragment<nv::wmma::matrix_a, QTC_DIM, KVTC_DIM, KTC_DIM,
-                                 scalar_t, nv::wmma::row_major>
-                  kFrag;
-              nv::wmma::load_matrix_sync(kFrag, POINTER, STRIDE);
+                scalar_t *kFragmentWarpSharedMemPtr =
+                    (scalar_t *)kvTile +
+                    (dimHeads + SHARED_MEM_PADDING_TILE) * KVTC_DIM * kvDimIdx +
+                    DHKTC_DIM * dimHeadsIdx;
 
-              nv::wmma::mma_sync(sFrag[kvDimIdx], qFrag, kFrag,
-                                 sFrag[kvDimIdx]);
-            }
+                if (dimHeadsIdx == 0) {
+                  nv::wmma::load_matrix_sync(qFrag, qFragmentWarpSharedMemPtr,
+                                             dimHeads +
+                                                 SHARED_MEM_PADDING_TILE);
+                }
 
-          } // end kvDimOuterIdx loop
-          // TODO each warp stores its S tiles (s tile rows) to shared memory
+                // the kFragment is not transposed in memory
+                nv::wmma::fragment<nv::wmma::matrix_b, QTC_DIM, KVTC_DIM,
+                                   DHKTC_DIM, scalar_t, nv::wmma::col_major>
+                    kFrag;
+
+                nv::wmma::load_matrix_sync(kFrag, kFragmentWarpSharedMemPtr,
+                                           dimHeads + SHARED_MEM_PADDING_TILE);
+
+                nv::wmma::mma_sync(sFrag[kvDimIdx], qFrag, kFrag,
+                                   sFrag[kvDimIdx]);
+
+              } // end dimHeadsIdx loop
+            }   // end if sTileWarpXIdx <= sTileWarpYIdx
+          }     // end kvDimOuterIdx loop
+
+          // each warp stores its S tiles (s tile rows) to shared memory
+          float *sTileWarpBlockSharedMemPtr =
+              (float *)cTile +
+              (KVtileDim + SHARED_MEM_PADDING_TILE) * QTC_DIM * NUM_WARPS *
+                  qDimIdx +
+              (KVtileDim + SHARED_MEM_PADDING_TILE) * QTC_DIM * warpId;
+
           for (uint kvDimIdx = 0; kvDimIdx < NUM_KV_DIM_TILES; ++kvDimIdx) {
-            nv::wmma::store_matrix_sync(POINTER, sFrag[kvDimIdx], STRIDE,
+
+            float *sTileWarpFragment =
+                sTileWarpBlockSharedMemPtr + KVTC_DIM * kvDimIdx;
+
+            nv::wmma::store_matrix_sync(sTileWarpFragment, sFrag[kvDimIdx],
+                                        (KVtileDim + SHARED_MEM_PADDING_TILE),
                                         nv::wmma::mem_row_major);
           }
 
@@ -1102,8 +1142,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               }
             }
             SMEMARRAY(cTile, KVtileDim, cWarpTileThreadSharedMemYIdx,
-                      cWarpTileThreadSharedMemXIdx) =
-                float2type<scalar_t>(qk_acc);
+                      cWarpTileThreadSharedMemXIdx) = qk_acc;
+            // float2type<scalar_t>(qk_acc);
             __syncthreads();
           }
         }
@@ -1141,9 +1181,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
                 threadIdx.x;
 
-            matC[cdWarpTileThreadGlobalMemIdx] =
+            matC[cdWarpTileThreadGlobalMemIdx] = float2type<scalar_t>(
                 SMEMARRAY(cTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
-                          cdWarpTileThreadSharedMemXIdx);
+                          cdWarpTileThreadSharedMemXIdx));
           }
         }
 #endif
@@ -1587,7 +1627,9 @@ void kernel_dispatchers::vlstm_fw_dispatch(
       sizeof(scalar_t) * QtileDim * (dimHeads + SHARED_MEM_PADDING_TILE);
   const uint kvTileSharedMemSize =
       sizeof(scalar_t) * KVtileDim * (dimHeads + SHARED_MEM_PADDING_TILE);
-  const uint cdTileSharedMemSize =
+  const uint cTileSharedMemSize =
+      sizeof(float) * QtileDim * (KVtileDim + SHARED_MEM_PADDING_TILE);
+  const uint dTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (KVtileDim + SHARED_MEM_PADDING_TILE);
 
   // See here:
@@ -1614,8 +1656,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // Intermediate tiles: 2x for mChunk, lChunk
   const uint sharedMemorySize =
       2 * qhTileSharedMemSize + 1 * kvTileSharedMemSize +
-      2 * cdTileSharedMemSize + iChunkSharedMemSize + fChunkSharedMemSize +
-      fTileColSharedMemSize + 6 * nmlChunkSharedMemSize;
+      1 * cTileSharedMemSize + 1 * dTileSharedMemSize + iChunkSharedMemSize +
+      fChunkSharedMemSize + fTileColSharedMemSize + 6 * nmlChunkSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, QtileDim: %d, KVtileDim: %d, "
          "shared_mem in bytes: %d\n",
