@@ -66,8 +66,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 //
 
 // MM (Matrix Multiply) SETUP
-#define NUM_KDIM_FRAGMENTS_A 1
-#define NUM_KDIM_FRAGMENTS_B 1
+#define NUM_KV_DIM_TILES CEIL_DIV(KVTILE_DIM, KVTC_DIM)
 //
 
 // we use the float4 load/store instructions to load 4 floats at once
@@ -988,29 +987,59 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         // KVtileDim outer: loop over columns of kTile over a warpgroup
         // -> Note: we need this outermost loop as for 8 warps we cannot fit the
         // whole KV rows into registers
-        // dimHeads: loop over columns of qTile and rows of kTile
-        // QTileDim: loop over rows of qTile
-        // KVtileDim inner: loop over columns of kTile within a warpgroup
-        const uint kvDimOuterEnd =
-            CEIL_DIV(KVtileDim, KVTC_DIM * WARP_GROUP_SIZE);
+        // dimHeads: loop over columns of qTile and rows of kTile (along head
+        // dimension) QTileDim: loop over rows of qTile KVtileDim inner: loop
+        // over columns of kTile within a warpgroup
+
         const uint qDimEnd = CEIL_DIV(QtileDim, QTC_DIM * NUM_WARPS);
-        const uint kvDimInnerEnd = WARP_GROUP_SIZE;
-        const uint dimHeadsEnd = CEIL_DIV(dimHeads, KTC_DIM);
+        const uint dimHeadsQBlockEnd = CEIL_DIV(dimHeads, KTC_DIM);
 
-        // TODO from here
-        // kvdim outer loop
+        // qDim loop (parallelize over warps)
+        for (uint qDimIdx = 0; qDimIdx < qDimEnd; ++qDimIdx) {
+          // S fragment accumulators per warp
+          nv::wmma::fragment<nv::wmma::accumulator, QTC_DIM, KVTC_DIM, KTC_DIM,
+                             float>
+              sFrag[NUM_KV_DIM_TILES];
 
-        // S fragment accumulators
-        nv::wmma::fragment<nv::wmma::accumulator, QTC_DIM, KVTC_DIM, KTC_DIM,
-                           float>
-            s[NUM_WARPS];
+          nv::wmma::fragment<nv::wmma::matrix_a, QTC_DIM, KVTC_DIM, KTC_DIM,
+                             scalar_t, nv::wmma::row_major>
+              qFrag;
 
-        // TODO where this
-        // dimheads loops
+          // init sFrags to zero
+          for (uint kvDimIdx = 0; kvDimIdx < NUM_KV_DIM_TILES; ++kvDimIdx)
+            nv::wmma::fill_fragment(sFrag[kvDimIdx], 0.0f);
 
-        // qDim loop
+          // TODO determine kvDimInnerEnd based on globalIdx
+          const uint kvDimEnd = NUM_KV_DIM_TILES; // CEIL_DIV(KVtileDim,
+                                                  // KVTC_DIM);
+          // kvdim loop
+          for (uint kvDimIdx = 0; kvDimIdx < kvDimEnd; ++kvDimIdx) {
 
-        // kvDim inner loop
+            // slide along dimHeads in qTile and kTile
+            for (uint dimHeadsIdx = 0; dimHeadsIdx < dimHeadsQBlockEnd;
+                 ++dimHeadsIdx) {
+
+              if (dimHeadsIdx == 0) {
+                nv::wmma::load_matrix_sync(qFrag, POINTER, STRIDE);
+              }
+
+              nv::wmma::fragment<nv::wmma::matrix_a, QTC_DIM, KVTC_DIM, KTC_DIM,
+                                 scalar_t, nv::wmma::row_major>
+                  kFrag;
+              nv::wmma::load_matrix_sync(kFrag, POINTER, STRIDE);
+
+              nv::wmma::mma_sync(sFrag[kvDimIdx], qFrag, kFrag,
+                                 sFrag[kvDimIdx]);
+            }
+
+          } // end kvDimOuterIdx loop
+          // TODO each warp stores its S tiles (s tile rows) to shared memory
+          for (uint kvDimIdx = 0; kvDimIdx < NUM_KV_DIM_TILES; ++kvDimIdx) {
+            nv::wmma::store_matrix_sync(POINTER, sFrag[kvDimIdx], STRIDE,
+                                        nv::wmma::mem_row_major);
+          }
+
+        } // end qDim loop
 
 #else
 
