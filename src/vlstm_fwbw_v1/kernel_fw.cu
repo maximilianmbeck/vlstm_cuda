@@ -154,7 +154,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
   //? for input and forget gate
   // init iChunk (KVTileDim x 1) in shared memory for input gate
   scalar_t *iChunk =
-      (scalar_t *)&dTile[QtileDim * (dimHeads + SHARED_MEM_PADDING)];
+      (scalar_t *)&dTile[QtileDim * (KVtileDim + SHARED_MEM_PADDING)];
   // init fChunk (QTileDim x 1) in shared memory for forget gate
   scalar_t *fChunk = (scalar_t *)&iChunk[KVtileDim * (1 + SHARED_MEM_PADDING)];
 
