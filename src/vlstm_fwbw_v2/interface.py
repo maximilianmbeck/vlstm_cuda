@@ -59,7 +59,7 @@ def vlstm_fw_cuda(
     vec_m = torch.zeros((B, NH, S, 1), dtype=mat_Q.dtype, device=mat_Q.device)
 
     # only for debugging
-    mat_C = torch.zeros((B, NH, S, S), dtype=mat_Q.dtype, device=mat_Q.device)
+    mat_C = torch.ones((B, NH, S, S), dtype=mat_Q.dtype, device=mat_Q.device)
 
     cppmodule.vlstm_fw(
         mat_H, vec_n, vec_m, mat_C, mat_Q, mat_K, mat_V, vec_igp, vec_fgp
