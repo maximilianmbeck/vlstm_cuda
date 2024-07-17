@@ -224,6 +224,11 @@ Forward New (only one kvTile):
 - How should I layout the "Chunks" Vectors in Memory. How much padding should I use?
   - I do not want to "waste" too much shared memory with padding.
 
+**Tensor Cores / WMMA Instructions**:
+
+- When computing wmma with the accumulator in float32 I have the result in fragments in float32.
+  How can I cast this to __half/bf16 for the tile in shared memory in the most efficient way?
+
 ## CUDA Resources
 
 ### CUDA Samples

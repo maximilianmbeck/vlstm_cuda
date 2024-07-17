@@ -132,10 +132,12 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_hsout1 1
 // #define DEBUG_hsout2 1
 
+// #define DEBUG_QK_TENSORCORE1
+
 // #define OUTPUT_matD 1
 #define OUTPUT_matS 1
 
-// #define COMPUTE_QK_TENSORCORE 1
+#define COMPUTE_QK_TENSORCORE 1
 
 // #define INCL_DMAT_COMP 1
 
@@ -1019,7 +1021,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           // kvdim loop
           for (uint kvDimIdx = 0; kvDimIdx < NUM_KV_DIM_TILES; ++kvDimIdx) {
             // init sFrags to zero
-            nv::wmma::fill_fragment(sFrag[kvDimIdx], 0.0f);
+            nv::wmma::fill_fragment(sFrag[kvDimIdx], 1.0f);
 
             //* (warp) offset X-axis in S = Q*K^T
             const uint sTileWarpXIdx = cTileBlockXIdx + KVTC_DIM * kvDimIdx;
@@ -1055,8 +1057,22 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 nv::wmma::load_matrix_sync(kFrag, kFragmentWarpSharedMemPtr,
                                            dimHeads + SHARED_MEM_PADDING_TILE);
 
-                nv::wmma::mma_sync(sFrag[kvDimIdx], qFrag, kFrag,
-                                   sFrag[kvDimIdx]);
+                // nv::wmma::mma_sync(sFrag[kvDimIdx], qFrag, kFrag,
+                //                    sFrag[kvDimIdx]);
+
+#ifdef DEBUG_QK_TENSORCORE1
+                if (blockIdx.x == 0 && blockIdx.y == 0 &&
+                    (threadIdx.x == 0 || threadIdx.x == 32)) {
+                  printf(
+                      "qTLdx=%d|kvTLdx=%d: wId=%d, sTXY(%d,%d), qDimIdx:%d, "
+                      "kvDimIdx:%d, dimHeadsIdx:%d, qFragLU=%f, kFragLU=%f\n",
+                      qTileIdx, kvTileIdx, warpId, sTileWarpXIdx, sTileWarpYIdx,
+                      qDimIdx, kvDimIdx, dimHeadsIdx,
+                      type2float(*qFragmentWarpSharedMemPtr),
+                      type2float(*kFragmentWarpSharedMemPtr));
+                }
+                __syncthreads();
+#endif // DEBUG_QK_TENSORCORE1
 
               } // end dimHeadsIdx loop
             }   // end if sTileWarpXIdx <= sTileWarpYIdx
