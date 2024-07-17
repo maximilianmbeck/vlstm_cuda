@@ -133,7 +133,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_hsout1 1
 // #define DEBUG_hsout2 1
 
-#define DEBUG_QK_TENSORCORE1 1
+// #define DEBUG_QK_TENSORCORE1 1
 
 // #define OUTPUT_matD 1
 #define OUTPUT_matS 1
