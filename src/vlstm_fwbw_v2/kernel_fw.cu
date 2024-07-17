@@ -133,7 +133,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_hsout1 1
 // #define DEBUG_hsout2 1
 
-// #define DEBUG_QK_TENSORCORE1
+#define DEBUG_QK_TENSORCORE1 1
 
 // #define OUTPUT_matD 1
 #define OUTPUT_matS 1
@@ -1061,12 +1061,13 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 #ifdef DEBUG_QK_TENSORCORE1
                 if (blockIdx.x == 0 && blockIdx.y == 0 &&
-                    (threadIdx.x == 32 || threadIdx.x == 32)) {
+                    (threadIdx.x == 64 || threadIdx.x == 32)) {
                   printf(
-                      "qTLdx=%d|kvTLdx=%d: wId=%d, sTXY(%d,%d), qDimIdx:%d, "
+                      "qTLdx=%d|kvTLdx=%d: wId=%d,TidxX=%d, sTXY(%d,%d), "
+                      "qDimIdx:%d, "
                       "kvDimIdx:%d, dimHeadsIdx:%d, qFragLU=%f, kFragLU=%f\n",
-                      qTileIdx, kvTileIdx, warpId, sTileWarpXIdx, sTileWarpYIdx,
-                      qDimIdx, kvDimIdx, dimHeadsIdx,
+                      qTileIdx, kvTileIdx, warpId, threadIdx.x, sTileWarpXIdx,
+                      sTileWarpYIdx, qDimIdx, kvDimIdx, dimHeadsIdx,
                       type2float(*qFragmentWarpSharedMemPtr),
                       type2float(*kFragmentWarpSharedMemPtr));
                 }
@@ -1075,7 +1076,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
               } // end dimHeadsIdx loop
             }   // end if sTileWarpXIdx <= sTileWarpYIdx
-          }     // end kvDimOuterIdx loop
+          }     // end kvDimIdx loop
 
           // each warp stores its S tiles (s tile rows) to shared memory
           float *sTileWarpBlockSharedMemPtr =
