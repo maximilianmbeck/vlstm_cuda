@@ -135,8 +135,9 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 // #define DEBUG_QK_TENSORCORE1 1
 
-#define OUTPUT_matD 1
+// #define OUTPUT_matD 1
 // #define OUTPUT_matS 1
+#define OUTPUT_matS_casted 1
 // #define OUTPUT_matCtilde 1
 
 #define COMPUTE_QK_TENSORCORE 1
@@ -1451,6 +1452,68 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         // TODO implement S += S V here (with tensor cores)
 
 #ifdef COMPUTE_SV_TENSORCORE
+        // move cTile to dTile and cast float to scalar_t
+        const uint cdWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
+        const uint cdWarpBlockXEnd = CEIL_DIV(KVtileDim, WARP_SIZE);
+        for (uint cdWarpBlockYIdx = 0; cdWarpBlockYIdx < cdWarpBlockYEnd;
+             ++cdWarpBlockYIdx) {
+          for (uint cdWarpBlockXIdx = 0; cdWarpBlockXIdx < cdWarpBlockXEnd;
+               ++cdWarpBlockXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpBlockSharedMemYIdx =
+                NUM_WARPS * cdWarpBlockYIdx + warpId;
+            const uint cdWarpBlockSharedMemXIdx =
+                WARP_SIZE * cdWarpBlockXIdx + laneId;
+
+            SMEMARRAY(dTile, KVtileDim, cdWarpBlockSharedMemYIdx,
+                      cdWarpBlockSharedMemXIdx) =
+                float2type<scalar_t>(SMEMARRAY(cTile, KVtileDim,
+                                               cdWarpBlockSharedMemYIdx,
+                                               cdWarpBlockSharedMemXIdx));
+          }
+        }
+
+#ifdef OUTPUT_matS_casted
+        //! DEBUG only: write matCtilde in dTile to global memory
+        // left upper corner of cWarpTileBlock in C (global memory)
+        //* cdTile Global Memory Index (Debug only)
+        const uint cdTileGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxCD +
+            (seqLen * QtileDim * gridDim.y) * qTileIdx;
+        const uint cdTileBlockGlobalMemIdx = cdTileGridXYGlobalMemIdx +
+                                             (seqLen * QtileDim) * blockIdx.y +
+                                             (kvTileIdx * KVtileDim);
+
+        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+             ++cdWarpTileYIdx) {
+          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+               ++cdWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpTileThreadSharedMemYIdx =
+                blockDim.y * cdWarpTileYIdx + threadIdx.y;
+            const uint cdWarpTileThreadSharedMemXIdx =
+                blockDim.x * cdWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            const uint cdWarpTileBlockGlobalMemIdx =
+                cdTileBlockGlobalMemIdx +
+                (seqLen * blockDim.y) * cdWarpTileYIdx +
+                blockDim.x * cdWarpTileXIdx;
+            const uint cdWarpTileThreadGlobalMemIdx =
+                cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
+                threadIdx.x;
+            if (cdWarpTileThreadSharedMemYIdx < QtileDim &&
+                cdWarpTileThreadSharedMemXIdx < KVtileDim) {
+              matC[cdWarpTileThreadGlobalMemIdx] =
+                  SMEMARRAY(dTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                            cdWarpTileThreadSharedMemXIdx);
+            }
+          }
+        }
+#endif
         // qDim loop (parallelize over warps)
 
 #endif
