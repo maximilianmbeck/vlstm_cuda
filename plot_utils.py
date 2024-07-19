@@ -1,11 +1,12 @@
+import torch
 from matplotlib import pyplot as plt
 
 
-def convert_to_diff_imarray(target, baseline=None):
+def convert_to_diff_imarray(target: torch.Tensor, baseline: torch.Tensor = None):
     if baseline is None:
-        imarr = target.abs().squeeze().cpu().numpy()
+        imarr = target.float().abs().squeeze().cpu().numpy()
     else:
-        imarr = (target - baseline).abs().squeeze().cpu().numpy()
+        imarr = (target.float() - baseline.float()).abs().squeeze().cpu().numpy()
     if imarr.ndim < 2:
         imarr = imarr[:, None]
     return imarr

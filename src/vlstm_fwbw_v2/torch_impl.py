@@ -222,7 +222,7 @@ def vlstm_fw_torch_ref(
 
     # retrieved values
     retrieved_values = C_matrix_normalized @ values  # (B, NH, S, DH)
-    return retrieved_values, normalizer, max_log_D, l, log_D_matrix, D_matrix
+    return retrieved_values, normalizer, max_log_D, l, log_D_matrix, D_matrix, C_matrix
 
 
 def vlstm_parallel_fw_torch_w_groupnorm(

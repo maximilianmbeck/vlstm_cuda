@@ -116,11 +116,11 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG12 1
 
 // #define DEBUG_GMEMSTREAM1 1
-#define DEBUG_GMEMSTREAM2 1 // write qTile to hTile
 // #define DEBUG_GMEMSTREAM3 1
-// #define DEBUG_GMEMSTREAM4 1
 // #define DEBUG_GMEMSTREAM5 1
-// #define DEBUG_GMEMSTREAM6 1
+// #define DEBUG_GMEMSTREAM_OUT_Q 1 // write qTile to hTile
+// #define DEBUG_GMEMSTREAM_OUT_K 1 // write kTile to hTile
+// #define DEBUG_GMEMSTREAM_OUT_V 1 // write vTile to hTile
 
 // #define DEBUG_fcolval1 1
 // #define DEBUG_fcolval2 1
@@ -135,12 +135,16 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 // #define DEBUG_QK_TENSORCORE1 1
 
-// #define OUTPUT_matD 1
-#define OUTPUT_matS 1
+#define OUTPUT_matD 1
+// #define OUTPUT_matS 1
+// #define OUTPUT_matCtilde 1
 
 #define COMPUTE_QK_TENSORCORE 1
+#define COMPUTE_SV_TENSORCORE 1
 
 // #define INCL_DMAT_COMP 1
+#define INCL_DMAT_COMP1 1
+#define INCL_DMAT_COMP2 1
 
 /**
 Conventions:
@@ -399,7 +403,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       }
       __syncthreads(); // TODO: necessary?
 
-#ifdef DEBUG_GMEMSTREAM2
+#ifdef DEBUG_GMEMSTREAM_OUT_Q
       //! DEBUG: write hTile to global memory (has the same memory index as
       //! qTile)
       for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
@@ -494,9 +498,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
 #endif
 
-#ifdef INCL_DMAT_COMP
+#ifdef INCL_DMAT_COMP1
         //! construct fTileCol for dTile computation (do only
-        //! of kvTileIdx=0)
+        //! for kvTileIdx=0)
         // TODO maybe use a parallel scan for optimization (each thread
         // basically does the same computation)
         // fTileCol is the first column of
@@ -591,6 +595,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             //! Construct fTileCol (first column of D matrix in a tiled way) by
             //! summing up the fgates
             // the very first forgetgate index must be f_2
+            // here basically every thread does the same sum but with different
+            // end indices
             for (uint fWarpChunkIdx = 0; fWarpChunkIdx < fWarpChunkEnd;
                  ++fWarpChunkIdx) {
               //? f idxes
@@ -850,10 +856,12 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             const uint cdWarpTileThreadGlobalMemIdx =
                 cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
                 threadIdx.x;
-
-            matC[cdWarpTileThreadGlobalMemIdx] =
-                SMEMARRAY(dTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
-                          cdWarpTileThreadSharedMemXIdx);
+            if (cdWarpTileThreadSharedMemYIdx < QtileDim &&
+                cdWarpTileThreadSharedMemXIdx < KVtileDim) {
+              matC[cdWarpTileThreadGlobalMemIdx] =
+                  SMEMARRAY(dTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                            cdWarpTileThreadSharedMemXIdx);
+            }
 #ifdef DEBUG10
             if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
                 (threadIdx.x == 0 && threadIdx.y == 0)) {
@@ -871,7 +879,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           }
         }
 #endif
-#endif // INCL_DMAT_COMP
+#endif // INCL_DMAT_COMP1
        //! kTile Loading (into kvTile)
        // see description for qTile loading
        // loops over rows (outer) and columns (inner) of kTile
@@ -942,7 +950,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
         __syncthreads(); // TODO: necessary?
 
-#ifdef DEBUG_GMEMSTREAM4
+#ifdef DEBUG_GMEMSTREAM_OUT_K
         //! DEBUG: write kvTile to global memory matH
         if (kvTileIdx == 0 && blockIdx.y == 0) {
           for (uint kvWarpTileYIdx = 0; kvWarpTileYIdx < kvWarpTileYEnd;
@@ -1203,7 +1211,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
 #endif
 
-#ifdef INCL_DMAT_COMP
+#ifdef INCL_DMAT_COMP2
         //! compute C_tilde: multiply S with dTile, i.e. fill cTile
         //! compute "raw normalizer" l: rowsum of cTile
         //! compute normalizer n: max(abs(l),exp(-m))
@@ -1221,15 +1229,18 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
           if (lThreadSharedMemYIdx < QtileDim) {
             // compute m_val
-            scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, lThreadSharedMemYIdx);
-            scalar_t m_val_unbounded = SMEMVECTOR(mChunk, lThreadSharedMemYIdx);
+            float m_prev_val =
+                type2float(SMEMVECTOR(mPrevChunk, lThreadSharedMemYIdx));
+            float m_val_unbounded =
+                type2float(SMEMVECTOR(mChunk, lThreadSharedMemYIdx));
             // bound m_val from below to avoid overflow in exp(-m_val)
             // TODO: adapt -10 according to precision exp(10) = 22026.5, for
             // fp32 and bfloat16 this value could be higher
-            scalar_t m_val_bounded =
-                max_g(m_val_unbounded, float2type<scalar_t>(-10.0f));
-            scalar_t m_val = max_g(m_prev_val, m_val_bounded);
-            SMEMVECTOR(mChunk, lThreadSharedMemYIdx) = m_val;
+            // float m_val_bounded = max_g(m_val_unbounded, -10.0f);
+            // float m_val = max_g(m_prev_val, m_val_bounded);
+            float m_val = m_val_unbounded;
+            SMEMVECTOR(mChunk, lThreadSharedMemYIdx) =
+                float2type<scalar_t>(m_val);
 
             // compute c_tilde_val in lower triangle of C Matrix
             //? c idxes
@@ -1244,33 +1255,35 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) =
                     dscalar_zero<scalar_t>();
               } else {
-                scalar_t s_val =
+                float s_val =
                     SMEMARRAY(cTile, KVtileDim, lThreadSharedMemYIdx, i);
-                scalar_t d_val =
-                    SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i);
+                float d_val = type2float(
+                    SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i));
 
                 // store c_tilde_val in dTile for now (later
                 // in cTile) for debugging only (since dTile
                 // is already written to
                 //   global memory)
-                scalar_t c_tilde_val = mul_g(s_val, exp_g(sub_g(d_val, m_val)));
+                float c_tilde_val = mul_g(s_val, exp_g(sub_g(d_val, m_val)));
                 SMEMARRAY(dTile, KVtileDim, lThreadSharedMemYIdx, i) =
-                    c_tilde_val;
+                    float2type<scalar_t>(c_tilde_val);
 
                 l_acc = add_g(l_acc, type2float(c_tilde_val));
               }
             }
             // l_acc is the rowsum of cTile
             // compute l_val = exp(m_prev - m) * l_prev + l_acc
-            scalar_t l_prev_val = SMEMVECTOR(lPrevChunk, lThreadSharedMemYIdx);
-            scalar_t l_val =
-                add_g(mul_g(exp_g(sub_g(m_prev_val, m_val)), l_prev_val),
-                      float2type<scalar_t>(l_acc));
-            SMEMVECTOR(lChunk, lThreadSharedMemYIdx) = l_val;
+            float l_prev_val =
+                type2float(SMEMVECTOR(lPrevChunk, lThreadSharedMemYIdx));
+            float l_val = add_g(
+                mul_g(exp_g(sub_g(m_prev_val, m_val)), l_prev_val), l_acc);
+            SMEMVECTOR(lChunk, lThreadSharedMemYIdx) =
+                float2type<scalar_t>(l_val);
 
             // compute n_val
-            scalar_t n_val = max_g(abs_g(l_val), exp_g(neg_g(m_val)));
-            SMEMVECTOR(nChunk, lThreadSharedMemYIdx) = n_val;
+            float n_val = max_g(abs_g(l_val), exp_g(neg_g(m_val)));
+            SMEMVECTOR(nChunk, lThreadSharedMemYIdx) =
+                float2type<scalar_t>(n_val);
 #ifdef DEBUG_hsout2
             if ((blockIdx.x == 0) && (blockIdx.y == 0) &&
                 (lThreadSharedMemYIdx < 4)) {
@@ -1287,7 +1300,48 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           }
         } // end: lWarpChunkIdx
         __syncthreads();
-#endif // INCL_DMAT_COMP
+#endif // INCL_DMAT_COMP2
+
+#ifdef OUTPUT_matCtilde
+        //! DEBUG only: write matCtilde in dTile to global memory
+        // left upper corner of cWarpTileBlock in C (global memory)
+        //* cdTile Global Memory Index (Debug only)
+        const uint cdTileGridXYGlobalMemIdx =
+            batchHeadGridXGlobalMemIdxCD +
+            (seqLen * QtileDim * gridDim.y) * qTileIdx;
+        const uint cdTileBlockGlobalMemIdx = cdTileGridXYGlobalMemIdx +
+                                             (seqLen * QtileDim) * blockIdx.y +
+                                             (kvTileIdx * KVtileDim);
+
+        const uint cdWarpTileYEnd = CEIL_DIV(QtileDim, blockDim.y);
+        const uint cdWarpTileXEnd = CEIL_DIV(KVtileDim, blockDim.x);
+        for (uint cdWarpTileYIdx = 0; cdWarpTileYIdx < cdWarpTileYEnd;
+             ++cdWarpTileYIdx) {
+          for (uint cdWarpTileXIdx = 0; cdWarpTileXIdx < cdWarpTileXEnd;
+               ++cdWarpTileXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cdWarpTileThreadSharedMemYIdx =
+                blockDim.y * cdWarpTileYIdx + threadIdx.y;
+            const uint cdWarpTileThreadSharedMemXIdx =
+                blockDim.x * cdWarpTileXIdx + threadIdx.x;
+            //* global memory:
+            const uint cdWarpTileBlockGlobalMemIdx =
+                cdTileBlockGlobalMemIdx +
+                (seqLen * blockDim.y) * cdWarpTileYIdx +
+                blockDim.x * cdWarpTileXIdx;
+            const uint cdWarpTileThreadGlobalMemIdx =
+                cdWarpTileBlockGlobalMemIdx + seqLen * threadIdx.y +
+                threadIdx.x;
+            if (cdWarpTileThreadSharedMemYIdx < QtileDim &&
+                cdWarpTileThreadSharedMemXIdx < KVtileDim) {
+              matC[cdWarpTileThreadGlobalMemIdx] =
+                  SMEMARRAY(dTile, KVtileDim, cdWarpTileThreadSharedMemYIdx,
+                            cdWarpTileThreadSharedMemXIdx);
+            }
+          }
+        }
+#endif
 
         //! vTile Loading (into kvTile)
         // see description for qTile loading
@@ -1356,7 +1410,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
         __syncthreads(); // TODO: necessary?
 
-#ifdef DEBUG_GMEMSTREAM6
+#ifdef DEBUG_GMEMSTREAM_OUT_V
         //! DEBUG: write kvTile to global memory matH
         if (kvTileIdx == 0 && blockIdx.y == 0) {
           for (uint kvWarpTileYIdx = 0; kvWarpTileYIdx < kvWarpTileYEnd;
@@ -1395,6 +1449,11 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
 #endif
         // TODO implement S += S V here (with tensor cores)
+
+#ifdef COMPUTE_SV_TENSORCORE
+        // qDim loop (parallelize over warps)
+
+#endif
 
 #ifdef INCL_DMAT_COMP
         // TODO bring back this later
