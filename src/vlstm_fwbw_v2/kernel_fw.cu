@@ -1100,13 +1100,12 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 // __syncthreads();
 #endif // DEBUG_QK_TENSORCORE1
 
-                nv::wmma::store_matrix_sync(sTileWarpFragmentSharedMemPtr,
-                                            sFrag,
-                                            (KVtileDim + SMEM_PADDING_TILE_2B),
-                                            nv::wmma::mem_row_major);
-
               } // end dimHeadsIdx loop
-            }   // end if sTileWarpXIdx <= sTileWarpYIdx
+
+              nv::wmma::store_matrix_sync(sTileWarpFragmentSharedMemPtr, sFrag,
+                                          (KVtileDim + SMEM_PADDING_TILE_2B),
+                                          nv::wmma::mem_row_major);
+            } // end if sTileWarpXIdx <= sTileWarpYIdx
             __syncthreads();
           } // end kvDimIdx loop
 
@@ -1585,9 +1584,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               const uint cTildeTileWarpXIdx =
                   cTileBlockXIdx + DHKV_KTC_DIM * kvDimIdx;
 
-              if (cTildeTileWarpXIdx > cTildeTileWarpYIdx) {
-                break;
-              }
+              //   if (cTildeTileWarpXIdx > cTildeTileWarpYIdx) {
+              //     break;
+              //   }
 
               // fragment declarations
               nv::wmma::fragment<nv::wmma::matrix_a, Q_MTC_DIM, KVDH_NTC_DIM,
