@@ -54,7 +54,7 @@ def vlstm_fw_cuda(
     vec_fgp = vec_fgp.contiguous()
 
     # allocate outputs and set to zero
-    mat_H = torch.zeros_like(mat_Q)
+    mat_H = torch.ones_like(mat_Q)
     vec_n = torch.zeros((B, NH, S, 1), dtype=mat_Q.dtype, device=mat_Q.device)
     vec_m = torch.zeros((B, NH, S, 1), dtype=mat_Q.dtype, device=mat_Q.device)
 

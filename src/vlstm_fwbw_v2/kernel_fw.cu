@@ -1480,6 +1480,10 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 float2type<scalar_t>(SMEMARRAY(cTile, KVtileDim,
                                                cdWarpBlockSharedMemYIdx,
                                                cdWarpBlockSharedMemXIdx));
+
+            // set cTile to zero
+            SMEMARRAY(cTile, KVtileDim, cdWarpBlockSharedMemYIdx,
+                      cdWarpBlockSharedMemXIdx) = 0.0f;
           }
         }
 
@@ -1569,6 +1573,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             float *hTileWarpFragmentSharedMemPtr =
                 hTileWarpBlockSharedMemPtr + KVDH_NTC_DIM * dimHeadsIdx;
             // init hFrag to zero on first kvTileIdx iteration
+            // nv::wmma::fill_fragment(hFrag, 0.0f);
+
             if (kvTileIdx == 0) {
               nv::wmma::fill_fragment(hFrag, 0.0f);
             } else {
@@ -1621,17 +1627,22 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                                           nv::wmma::mem_row_major);
 #ifdef DEBUG_SV_TENSORCORE1
               if (blockIdx.x == 0 && blockIdx.y == 0 &&
-                  (threadIdx.x == 32 || threadIdx.x == 32)) {
+                  (threadIdx.x == 0 || threadIdx.x == 1)) {
                 printf(
                     "qTLdx=%d|kvTLdx=%d: wId=%d,TidxX=%d, cTildeTXY(%d,%d), "
                     "qDimIdx:%d, "
                     "kvDimIdx:%d, dimHeadsIdx:%d, cTildeFragLU=%f, vFragLU=%f, "
-                    "sFragLU=%f\n",
+                    "hFragLU=%f\n",
                     qTileIdx, kvTileIdx, warpId, threadIdx.x,
                     cTildeTileWarpXIdx, cTildeTileWarpYIdx, qDimIdx, kvDimIdx,
-                    dimHeadsIdx, type2float(*cTildeFragmentWarpSharedMemPtr),
-                    type2float(*vFragmentWarpSharedMemPtr),
-                    *hTileWarpFragmentSharedMemPtr);
+                    dimHeadsIdx,
+                    type2float(
+                        *(cTildeFragmentWarpSharedMemPtr +
+                          (laneId * (KVtileDim + SMEM_PADDING_TILE_2B)))),
+                    type2float(*(vFragmentWarpSharedMemPtr +
+                                 (laneId * (dimHeads + SMEM_PADDING_TILE_2B)))),
+                    *(hTileWarpFragmentSharedMemPtr +
+                      (laneId * (dimHeads + SMEM_PADDING_TILE_2B))));
               }
               // __syncthreads();
 #endif // DEBUG_SV_TENSORCORE1
@@ -1641,8 +1652,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           } // end dimHeadsIdx loop
         }   // end qDimIdx loop
 
-        // move hTile in float cTile to scalar_t hTile from where it is written
-        // to global memory and cast float to scalar_t
+        // move float hTile at location cTile to location hTile as scalar_t from
+        // where it is written to global memory
         const uint hWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
         const uint hWarpBlockXEnd = CEIL_DIV(dimHeads, WARP_SIZE);
         for (uint hWarpBlockYIdx = 0; hWarpBlockYIdx < cdWarpBlockYEnd;
@@ -1819,6 +1830,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           scalar_t *matHTileWarpBlockGlobalMemPtr =
               (scalar_t *)matH + qTileBlockGlobalMemIdx +
               (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
+
           *(((float4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
               *(((float4 *)(hTileWarpBlockSharedMemPtr)) + colGmemTidxX);
         }
