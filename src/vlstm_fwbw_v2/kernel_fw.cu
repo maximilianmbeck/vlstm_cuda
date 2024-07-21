@@ -2,7 +2,6 @@
 // Author: Maximilian Beck
 
 #include <cooperative_groups.h>
-#include <cstdio>
 #include <cuda.h>
 #include <cuda_bf16.h>
 #include <cuda_device_runtime_api.h>
@@ -12,6 +11,10 @@
 #include <driver_types.h>
 #include <math_constants.h>
 #include <mma.h>
+
+// c++
+#include <algorithm>
+#include <cstdio>
 
 #include "../util/cuda_errorcheck.h"
 #include "../util/inline_ops.cuh"
@@ -48,9 +51,9 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 //
 
 // Tensor Core MxN = QTCxKVC dimensions (K is always 16)
-#define QTC_DIM 16   // M
-#define KVTC_DIM 16  // N
-#define DHKTC_DIM 16 // K
+#define Q_MTC_DIM 16    // M
+#define KVDH_NTC_DIM 16 // N
+#define DHKV_KTC_DIM 16 // K
 //
 
 // SHMEM TILE DIMENSIONS
@@ -61,12 +64,12 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 //
 
 // WARP SETUP
-#define NUM_WARP_GROUPS (QTILE_DIM / (WARP_GROUP_SIZE * QTC_DIM))
+#define NUM_WARP_GROUPS (QTILE_DIM / (WARP_GROUP_SIZE * Q_MTC_DIM))
 #define NUM_WARPS (NUM_WARP_GROUPS * WARP_GROUP_SIZE)
 //
 
 // MM (Matrix Multiply) SETUP
-#define NUM_KV_DIM_TILES CEIL_DIV(KVTILE_DIM, KVTC_DIM)
+#define NUM_KV_DIM_TILES CEIL_DIV(KVTILE_DIM, KVDH_NTC_DIM)
 //
 
 // we use the float4 load/store instructions to load 4 floats at once
@@ -1002,70 +1005,72 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         // dimension) QTileDim: loop over rows of qTile KVtileDim inner: loop
         // over columns of kTile within a warpgroup
 
-        const uint qDimEnd = CEIL_DIV(QtileDim, QTC_DIM * NUM_WARPS);
-        const uint dimHeadsQBlockEnd = CEIL_DIV(dimHeads, DHKTC_DIM);
+        const uint qDimEnd = CEIL_DIV(QtileDim, Q_MTC_DIM * NUM_WARPS);
+        const uint dimHeadsQKEnd = CEIL_DIV(dimHeads, DHKV_KTC_DIM);
 
         // qDim loop (parallelize over warps)
         for (uint qDimIdx = 0; qDimIdx < qDimEnd; ++qDimIdx) {
 
-          // define shared mem warp pointer to qTile
+          // define shared mem warp block pointer to qTile
           scalar_t *qTileWarpBlockSharedMemPtr =
               (scalar_t *)qTile +
-              (dimHeads + SMEM_PADDING_TILE_2B) * QTC_DIM * NUM_WARPS *
+              (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * NUM_WARPS *
                   qDimIdx +
-              (dimHeads + SMEM_PADDING_TILE_2B) * QTC_DIM * warpId;
+              (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
 
           // each warp stores its sTile to shared memory
           float *sTileWarpBlockSharedMemPtr =
               (float *)cTile +
-              (KVtileDim + SMEM_PADDING_TILE_2B) * QTC_DIM * NUM_WARPS *
+              (KVtileDim + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * NUM_WARPS *
                   qDimIdx +
-              (KVtileDim + SMEM_PADDING_TILE_2B) * QTC_DIM * warpId;
+              (KVtileDim + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
 
           //* (warp) offset Y-axis in S = Q*K^T
-          const uint sTileWarpYIdx =
-              cTileBlockYIdx + QTC_DIM * NUM_WARPS * qDimIdx + QTC_DIM * warpId;
+          const uint sTileWarpYIdx = cTileBlockYIdx +
+                                     Q_MTC_DIM * NUM_WARPS * qDimIdx +
+                                     Q_MTC_DIM * warpId;
 
           // kvdim loop
           for (uint kvDimIdx = 0; kvDimIdx < NUM_KV_DIM_TILES; ++kvDimIdx) {
             //* (warp) offset X-axis in S = Q*K^T
-            const uint sTileWarpXIdx = cTileBlockXIdx + KVTC_DIM * kvDimIdx;
+            const uint sTileWarpXIdx = cTileBlockXIdx + KVDH_NTC_DIM * kvDimIdx;
 
             //! check for causality here
             // compute only the lower triangle (below main diagonal) of S =
             // Q*K^T
             if (sTileWarpXIdx <= sTileWarpYIdx) {
               // S fragment accumulators per warp
-              nv::wmma::fragment<nv::wmma::accumulator, QTC_DIM, KVTC_DIM,
-                                 DHKTC_DIM, float>
+              nv::wmma::fragment<nv::wmma::accumulator, Q_MTC_DIM, KVDH_NTC_DIM,
+                                 DHKV_KTC_DIM, float>
                   sFrag;
               // init sFrags to zero
               nv::wmma::fill_fragment(sFrag, 0.0f);
 
               //* (warp) shared memory pointer to sTile
               float *sTileWarpFragmentSharedMemPtr =
-                  sTileWarpBlockSharedMemPtr + KVTC_DIM * kvDimIdx;
+                  sTileWarpBlockSharedMemPtr + KVDH_NTC_DIM * kvDimIdx;
               // slide along dimHeads in qTile and kTile
-              for (uint dimHeadsIdx = 0; dimHeadsIdx < dimHeadsQBlockEnd;
+              for (uint dimHeadsIdx = 0; dimHeadsIdx < dimHeadsQKEnd;
                    ++dimHeadsIdx) {
                 // fragment declarations:
-                nv::wmma::fragment<nv::wmma::matrix_a, QTC_DIM, KVTC_DIM,
-                                   DHKTC_DIM, scalar_t, nv::wmma::row_major>
+                nv::wmma::fragment<nv::wmma::matrix_a, Q_MTC_DIM, KVDH_NTC_DIM,
+                                   DHKV_KTC_DIM, scalar_t, nv::wmma::row_major>
                     qFrag;
 
                 // the kFragment is not transposed in memory
-                nv::wmma::fragment<nv::wmma::matrix_b, QTC_DIM, KVTC_DIM,
-                                   DHKTC_DIM, scalar_t, nv::wmma::col_major>
+                nv::wmma::fragment<nv::wmma::matrix_b, Q_MTC_DIM, KVDH_NTC_DIM,
+                                   DHKV_KTC_DIM, scalar_t, nv::wmma::col_major>
                     kFrag;
 
                 //* (warp) shared mem pointers
                 scalar_t *qFragmentWarpSharedMemPtr =
-                    qTileWarpBlockSharedMemPtr + DHKTC_DIM * dimHeadsIdx;
+                    qTileWarpBlockSharedMemPtr + DHKV_KTC_DIM * dimHeadsIdx;
 
                 scalar_t *kFragmentWarpSharedMemPtr =
                     (scalar_t *)kvTile +
-                    (dimHeads + SMEM_PADDING_TILE_2B) * KVTC_DIM * kvDimIdx +
-                    DHKTC_DIM * dimHeadsIdx;
+                    (dimHeads + SMEM_PADDING_TILE_2B) * KVDH_NTC_DIM *
+                        kvDimIdx +
+                    DHKV_KTC_DIM * dimHeadsIdx;
 
                 nv::wmma::load_matrix_sync(qFrag, qFragmentWarpSharedMemPtr,
                                            dimHeads + SMEM_PADDING_TILE_2B);
@@ -1475,7 +1480,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
 
 #ifdef OUTPUT_matS_casted
-        //! DEBUG only: write matCtilde in dTile to global memory
+        //! DEBUG only: write casted sTile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
         //* cdTile Global Memory Index (Debug only)
         const uint cdTileGridXYGlobalMemIdx =
@@ -1514,7 +1519,39 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           }
         }
 #endif
+
         // qDim loop (parallelize over warps)
+        for (uint qDimIdx = 0; qDimIdx < qDimEnd; ++qDimIdx) {
+
+          // define shared mem warp block pointer to dTile
+          scalar_t *dTileWarpBlockSharedMemPtr =
+              (scalar_t *)dTile +
+              (KVtileDim + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * NUM_WARPS *
+                  qDimIdx +
+              (KVtileDim + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
+
+          // define shared mem warp block to output tile (hTile)
+          // Problem: we need to store the output tile as float in shared memory
+          // and then cast again to scalar_t before writing to global memory.
+          // We want to do this in a memory efficient way, therefore we use
+          // the previous space of cTile
+          // for this we adapted the shared memory space for cTile to be
+          // (QTileDim x max(KVtileDim, dimHeads)) to have enough space for
+          // hTile
+
+          float *hTileWarpBlockSharedMemPtr =
+              (float *)cTile +
+              (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * NUM_WARPS *
+                  qDimIdx +
+              (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
+
+          //* (warp) offset Y-axis in Ctilde = (Q K^T) * D
+          const uint cTildeTileWarpYIdx = cTileBlockYIdx +
+                                          Q_MTC_DIM * NUM_WARPS * qDimIdx +
+                                          Q_MTC_DIM * warpId;
+
+          // dimHeads loop
+        }
 
 #endif
 
@@ -1765,7 +1802,8 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   const uint kvTileSharedMemSize =
       sizeof(scalar_t) * KVtileDim * (dimHeads + SMEM_PADDING_TILE_2B);
   const uint cTileSharedMemSize =
-      sizeof(float) * QtileDim * (KVtileDim + SMEM_PADDING_TILE_2B);
+      sizeof(float) * QtileDim *
+      (std::max(KVtileDim, dimHeads) + SMEM_PADDING_TILE_2B);
   const uint dTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (KVtileDim + SMEM_PADDING_TILE_2B);
 
