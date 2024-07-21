@@ -1565,12 +1565,18 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                                DHKV_KTC_DIM, float>
                 hFrag;
 
-            // init hFrag to zero
-            nv::wmma::fill_fragment(hFrag, 0.0f);
-
             //* (warp) shared memory pointer to hTile
             float *hTileWarpFragmentSharedMemPtr =
                 hTileWarpBlockSharedMemPtr + KVDH_NTC_DIM * dimHeadsIdx;
+            // init hFrag to zero on first kvTileIdx iteration
+            if (kvTileIdx == 0) {
+              nv::wmma::fill_fragment(hFrag, 0.0f);
+            } else {
+              // load hTile from shared memory
+              nv::wmma::load_matrix_sync(hFrag, hTileWarpFragmentSharedMemPtr,
+                                         dimHeads + SMEM_PADDING_TILE_2B,
+                                         nv::wmma::mem_row_major);
+            }
 
             // slide along KVtileDim in cTildeTile
             // only compute for the lower triangle of cTildeTile
@@ -1609,7 +1615,34 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                                          dimHeads + SMEM_PADDING_TILE_2B);
 
               nv::wmma::mma_sync(hFrag, cTildeFrag, vFrag, hFrag);
-            }
+            } // end kvDimIdx loop
+
+            nv::wmma::store_matrix_sync(hTileWarpFragmentSharedMemPtr, hFrag,
+                                        dimHeads + SMEM_PADDING_TILE_2B,
+                                        nv::wmma::mem_row_major);
+          } // end dimHeadsIdx loop
+        }   // end qDimIdx loop
+
+        // move hTile in float cTile to scalar_t hTile from where it is written
+        // to global memory and cast float to scalar_t
+        const uint hWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
+        const uint hWarpBlockXEnd = CEIL_DIV(dimHeads, WARP_SIZE);
+        for (uint hWarpBlockYIdx = 0; hWarpBlockYIdx < cdWarpBlockYEnd;
+             ++hWarpBlockYIdx) {
+          for (uint hWarpBlockXIdx = 0; hWarpBlockXIdx < cdWarpBlockXEnd;
+               ++hWarpBlockXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint hWarpBlockSharedMemYIdx =
+                NUM_WARPS * hWarpBlockYIdx + warpId;
+            const uint hWarpBlockSharedMemXIdx =
+                WARP_SIZE * hWarpBlockXIdx + laneId;
+
+            SMEMARRAY(hTile, dimHeads, hWarpBlockSharedMemYIdx,
+                      hWarpBlockSharedMemXIdx) =
+                float2type<scalar_t>(SMEMARRAY(cTile, dimHeads,
+                                               hWarpBlockSharedMemYIdx,
+                                               hWarpBlockSharedMemXIdx));
           }
         }
 
@@ -1768,9 +1801,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           scalar_t *matHTileWarpBlockGlobalMemPtr =
               (scalar_t *)matH + qTileBlockGlobalMemIdx +
               (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
-          // TODO uncomment:
-          //   *(((float4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
-          //       *(((float4 *)(hTileWarpBlockSharedMemPtr)) + colGmemTidxX);
+          *(((float4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
+              *(((float4 *)(hTileWarpBlockSharedMemPtr)) + colGmemTidxX);
         }
       }
       __syncthreads(); // TODO: necessary?
