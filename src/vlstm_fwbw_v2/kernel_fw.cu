@@ -137,7 +137,8 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_hsout2 1
 
 // #define DEBUG_QK_TENSORCORE1 1
-#define DEBUG_SV_TENSORCORE1 1
+// #define DEBUG_SV_TENSORCORE1 1
+#define DEBUG_SV_TENSORCORE2 1
 
 // #define OUTPUT_matD 1
 // #define OUTPUT_matS 1
@@ -1486,7 +1487,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                       cdWarpBlockSharedMemXIdx) = 0.0f;
           }
         }
-
+        __syncthreads();
 #ifdef OUTPUT_matS_casted
         //! DEBUG only: write casted sTile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
@@ -1526,6 +1527,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             }
           }
         }
+        __syncthreads();
 #endif
 
         const uint dimHeadsSVEnd = CEIL_DIV(dimHeads, KVDH_NTC_DIM);
@@ -1648,9 +1650,11 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #endif // DEBUG_SV_TENSORCORE1
 
             } // end kvDimIdx loop
+            __syncthreads();
 
           } // end dimHeadsIdx loop
         }   // end qDimIdx loop
+        // __syncthreads();
 
         // move float hTile at location cTile to location hTile as scalar_t from
         // where it is written to global memory
@@ -1672,10 +1676,24 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                 float2type<scalar_t>(SMEMARRAY(cTile, dimHeads,
                                                hWarpBlockSharedMemYIdx,
                                                hWarpBlockSharedMemXIdx));
+#ifdef DEBUG_SV_TENSORCORE2
+            if (blockIdx.x == 0 && blockIdx.y == 0 && (warpId <= 4) &&
+                (hWarpBlockSharedMemXIdx == 0 ||
+                 hWarpBlockSharedMemXIdx == 16)) {
+              printf("qTLdx=%d|kvTLdx=%d: wId=%d|lId=%d,TidxX=%d: "
+                     "hWBIdxXY(%d,%d), hTileSMXY(%d,%d)=%f\n",
+                     qTileIdx, kvTileIdx, warpId, laneId, threadIdx.x,
+                     hWarpBlockXIdx, hWarpBlockYIdx, hWarpBlockSharedMemXIdx,
+                     hWarpBlockSharedMemYIdx,
+                     SMEMARRAY(cTile, dimHeads, hWarpBlockSharedMemYIdx,
+                               hWarpBlockSharedMemXIdx));
+            }
+            // __syncthreads();
+#endif // DEBUG_SV_TENSORCORE2
           }
         }
-
-#endif
+        __syncthreads();
+#endif // COMPUTE_SV_TENSORCORE
 
 #ifdef INCL_DMAT_COMP
         // TODO bring back this later
