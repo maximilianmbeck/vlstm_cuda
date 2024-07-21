@@ -508,6 +508,28 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
 #endif
 
+        //! init cTile to 0
+        // Y: QtileDim, X: cTileStride
+        const uint cWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
+        const uint cWarpBlockXEnd = CEIL_DIV(cTileStride, WARP_SIZE);
+        for (uint cWarpBlockYIdx = 0; cWarpBlockYIdx < cWarpBlockYEnd;
+             ++cWarpBlockYIdx) {
+          for (uint cWarpBlockXIdx = 0; cWarpBlockXIdx < cWarpBlockXEnd;
+               ++cWarpBlockXIdx) {
+            //? cTileIdxes
+            //* shared memory:
+            const uint cWarpBlockSharedMemYIdx =
+                NUM_WARPS * cWarpBlockYIdx + warpId;
+            const uint cWarpBlockSharedMemXIdx =
+                WARP_SIZE * cWarpBlockXIdx + laneId;
+
+            // set cTile to zero
+            SMEMARRAY(cTile, cTileStride, cWarpBlockSharedMemYIdx,
+                      cWarpBlockSharedMemXIdx) = 0.0f;
+          }
+        }
+        __syncthreads();
+
 #ifdef INCL_DMAT_COMP1
         //! construct fTileCol for dTile computation (do only
         //! for kvTileIdx=0)
