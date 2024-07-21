@@ -137,6 +137,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_hsout2 1
 
 // #define DEBUG_QK_TENSORCORE1 1
+#define DEBUG_SV_TENSORCORE1 1
 
 // #define OUTPUT_matD 1
 // #define OUTPUT_matS 1
@@ -1614,11 +1615,29 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                                          dimHeads + SMEM_PADDING_TILE_2B);
 
               nv::wmma::mma_sync(hFrag, cTildeFrag, vFrag, hFrag);
+
+              nv::wmma::store_matrix_sync(hTileWarpFragmentSharedMemPtr, hFrag,
+                                          dimHeads + SMEM_PADDING_TILE_2B,
+                                          nv::wmma::mem_row_major);
+#ifdef DEBUG_SV_TENSORCORE1
+              if (blockIdx.x == 0 && blockIdx.y == 0 &&
+                  (threadIdx.x == 32 || threadIdx.x == 32)) {
+                printf(
+                    "qTLdx=%d|kvTLdx=%d: wId=%d,TidxX=%d, cTildeTXY(%d,%d), "
+                    "qDimIdx:%d, "
+                    "kvDimIdx:%d, dimHeadsIdx:%d, cTildeFragLU=%f, vFragLU=%f, "
+                    "sFragLU=%f\n",
+                    qTileIdx, kvTileIdx, warpId, threadIdx.x,
+                    cTildeTileWarpXIdx, cTildeTileWarpYIdx, qDimIdx, kvDimIdx,
+                    dimHeadsIdx, type2float(*cTildeFragmentWarpSharedMemPtr),
+                    type2float(*vFragmentWarpSharedMemPtr),
+                    *hTileWarpFragmentSharedMemPtr);
+              }
+              // __syncthreads();
+#endif // DEBUG_SV_TENSORCORE1
+
             } // end kvDimIdx loop
 
-            nv::wmma::store_matrix_sync(hTileWarpFragmentSharedMemPtr, hFrag,
-                                        dimHeads + SMEM_PADDING_TILE_2B,
-                                        nv::wmma::mem_row_major);
           } // end dimHeadsIdx loop
         }   // end qDimIdx loop
 
