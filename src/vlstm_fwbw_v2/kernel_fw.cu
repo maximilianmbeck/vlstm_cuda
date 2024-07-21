@@ -197,7 +197,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                                   // TODO from here
   // init cTile (QtileDim x KVTileDim) in shared memory for intermediate
   // result of QK^T
-  // TODO initialize cTile to 0
   float *cTile = (float *)sbuf;
 
   //? for inputs
