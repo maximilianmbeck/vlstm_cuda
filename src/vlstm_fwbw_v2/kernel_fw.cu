@@ -1583,15 +1583,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   qDimIdx +
               (KVtileDim + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
 
-          // define shared mem warp block to output tile (hTile)
-          // Problem: we need to store the output tile as float in shared memory
-          // and then cast again to scalar_t before writing to global memory.
-          // We want to do this in a memory efficient way, therefore we use
-          // the previous space of cTile
-          // for this we adapted the shared memory space for cTile to be
-          // (QTileDim x max(KVtileDim, dimHeads)) to have enough space for
-          // hTile
-
           float *hTileWarpBlockSharedMemPtr =
               (float *)hTile +
               (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * NUM_WARPS *
@@ -1616,7 +1607,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             float *hTileWarpFragmentSharedMemPtr =
                 hTileWarpBlockSharedMemPtr + KVDH_NTC_DIM * dimHeadsIdx;
             // init hFrag to zero on first kvTileIdx iteration
-            // nv::wmma::fill_fragment(hFrag, 0.0f);
 
             if (kvTileIdx == 0) {
               nv::wmma::fill_fragment(hFrag, 0.0f);
@@ -1633,10 +1623,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               //* (warp) offset X-axis in Ctilde = (Q K^T) * D
               const uint cTildeTileWarpXIdx =
                   cTileBlockXIdx + DHKV_KTC_DIM * kvDimIdx;
-
-              //   if (cTildeTileWarpXIdx > cTildeTileWarpYIdx) {
-              //     break;
-              //   }
 
               // fragment declarations
               nv::wmma::fragment<nv::wmma::matrix_a, Q_MTC_DIM, KVDH_NTC_DIM,
@@ -1665,10 +1651,10 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
               nv::wmma::mma_sync(hFrag, cTildeFrag, vFrag, hFrag);
 
+#ifdef DEBUG_SV_TENSORCORE1
               nv::wmma::store_matrix_sync(hTileWarpFragmentSharedMemPtr, hFrag,
                                           dimHeads + SMEM_PADDING_TILE_2B,
                                           nv::wmma::mem_row_major);
-#ifdef DEBUG_SV_TENSORCORE1
               if (blockIdx.x == 0 && blockIdx.y == 0 &&
                   (threadIdx.x == 0 || threadIdx.x == 1)) {
                 printf(
@@ -1691,6 +1677,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #endif // DEBUG_SV_TENSORCORE1
 
             } // end kvDimIdx loop
+            nv::wmma::store_matrix_sync(hTileWarpFragmentSharedMemPtr, hFrag,
+                                        dimHeads + SMEM_PADDING_TILE_2B,
+                                        nv::wmma::mem_row_major);
             __syncthreads();
 
           } // end dimHeadsIdx loop
@@ -1972,7 +1961,7 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // TODO Need to dynamically check how many blocks we can launch
   // TODO add check if batchSize*numHeads exceeds max gridDim.x
 
-  const dim3 gridDims(batchSize * numHeads, 1);
+  const dim3 gridDims(batchSize * numHeads, 2);
   //   const dim3 gridDims(1, 1);
 
   //! calculate dynamic shared memory size
