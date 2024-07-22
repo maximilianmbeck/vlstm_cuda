@@ -151,6 +151,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define INCL_DMAT_COMP 1
 #define INCL_DMAT_COMP1 1
 #define INCL_DMAT_COMP2 1
+#define INCL_DMAT_COMP3 1
 
 /**
 Conventions:
@@ -1500,9 +1501,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           __syncthreads(); // TODO: necessary?
         }
 #endif
-        // TODO implement S += S V here (with tensor cores)
 
 #ifdef COMPUTE_SV_TENSORCORE
+        // TODO here: remove this move operation, dTile contains S * D
         // move cTile to dTile and cast float to scalar_t
         const uint cdWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
         const uint cdWarpBlockXEnd = CEIL_DIV(KVtileDim, WARP_SIZE);
@@ -1583,6 +1584,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   qDimIdx +
               (KVtileDim + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
 
+          // TODO here: divide Ctilde by n
+          // each warp does its part of the normalization
+
           float *hTileWarpBlockSharedMemPtr =
               (float *)hTile +
               (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * NUM_WARPS *
@@ -1611,6 +1615,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             if (kvTileIdx == 0) {
               nv::wmma::fill_fragment(hFrag, 0.0f);
             } else {
+              // TODO here: multiply hTile (old) with exp(m_old - m_new) *
+              // n_old/n_new
+
               // load hTile from shared memory
               nv::wmma::load_matrix_sync(hFrag, hTileWarpFragmentSharedMemPtr,
                                          dimHeads + SMEM_PADDING_TILE_2B,
@@ -1863,38 +1870,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       }
       __syncthreads();
 
-      // deprecated since we need to cast to scalar_t beforehand
-      //   // see qTile write to global memory for reference
-      //   for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
-      //        ++qWarpTileYIdx) {
-      //     for (uint qWarpTileXIdx = 0; qWarpTileXIdx < qWarpTileXEnd;
-      //          ++qWarpTileXIdx) {
-
-      //       //? qWarpTileIdxes
-      //       //* shared memory:
-      //       const uint qWarpBlockSharedMemYIdx =
-      //           GMEM_LOAD_BLOCK_ROWS_Y * qWarpTileYIdx + rowGmemTidxY;
-
-      //       const uint qWarpBlockSharedMemXIdx =
-      //           GMEM_LOAD_BLOCK_2BITEMS_X * qWarpTileXIdx;
-
-      //       scalar_t *hTileWarpBlockSharedMemPtr =
-      //           (scalar_t *)hTile +
-      //           (dimHeads + SMEM_PADDING_TILE_2B) * qWarpBlockSharedMemYIdx +
-      //           qWarpBlockSharedMemXIdx;
-
-      //       // no memory padding for global memory:
-      //       scalar_t *matHTileWarpBlockGlobalMemPtr =
-      //           (scalar_t *)matH + qTileBlockGlobalMemIdx +
-      //           (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
-
-      //       *(((float4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
-      //           *(((float4 *)(hTileWarpBlockSharedMemPtr)) + colGmemTidxX);
-      //     }
-      //   }
-      //   __syncthreads(); // TODO: necessary?
-
-#ifdef INCL_DMAT_COMP
+#ifdef INCL_DMAT_COMP3
       //* global memory:
       const uint nmChunkGridXYGlobalMemIdx =
           batchHeadGridXGlobalMemIdxIFgateNMchunk +
@@ -1925,7 +1901,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
         }
       }
       __syncthreads();
-#endif // INCL_DMAT_COMP
+#endif // INCL_DMAT_COMP3
     }  // end looplevel 1: qTileIdx
 
     __syncthreads();
