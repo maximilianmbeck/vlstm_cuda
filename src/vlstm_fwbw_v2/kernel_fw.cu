@@ -138,7 +138,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 // #define DEBUG_QK_TENSORCORE1 1
 // #define DEBUG_SV_TENSORCORE1 1
-#define DEBUG_SV_TENSORCORE2 1
+// #define DEBUG_SV_TENSORCORE2 1
 
 // #define OUTPUT_matD 1
 // #define OUTPUT_matS 1
@@ -188,8 +188,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #endif
   cg::grid_group gridGroup = cg::this_grid();
 
-  const uint cTileStride = max(dimHeads, KVtileDim);
-
   //! Shared Memory aka SRAM
   // the data in this shared memory is shared across all threads in a thread
   // block
@@ -199,6 +197,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
   // result of QK^T
   float *cTile = (float *)sbuf;
 
+  // init result hTile (QTileDim x dimHeads) in shared memory
+  float *hTile = (float *)&cTile[QtileDim * (KVtileDim + SMEM_PADDING_TILE_2B)];
+
   //? for inputs
   // Note: keep in mind the memory is defined in a contiguous region.
   // One pointer has the full memory space until the next point is defined.
@@ -207,19 +208,16 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
   // qtile (QtileDim x dimHeads) in shared memory (padding for alignment)
   scalar_t *qTile =
-      (scalar_t *)&cTile[QtileDim * (cTileStride + SMEM_PADDING_TILE_2B)];
+      (scalar_t *)&hTile[QtileDim * (dimHeads + SMEM_PADDING_TILE_2B)];
+
   // kTile and vTile (KVtileDim x dimHeads) in shared memory
   scalar_t *kvTile =
       (scalar_t *)&qTile[QtileDim * (dimHeads + SMEM_PADDING_TILE_2B)];
 
-  //? for intermediate results
-  // init result hTile (QTileDim x dimHeads) in shared memory
-  scalar_t *hTile =
-      (scalar_t *)&kvTile[KVtileDim * (dimHeads + SMEM_PADDING_TILE_2B)];
   // init dTile (QTileDim x KVTileDim) in shared memory for forget and input
   // gate matrix
   scalar_t *dTile =
-      (scalar_t *)&hTile[QtileDim * (dimHeads + SMEM_PADDING_TILE_2B)];
+      (scalar_t *)&kvTile[KVtileDim * (dimHeads + SMEM_PADDING_TILE_2B)];
 
   //? for input and forget gate
   // init iChunk (KVTileDim x 1) in shared memory for input gate
@@ -413,7 +411,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       __syncthreads(); // TODO: necessary?
 
 #ifdef DEBUG_GMEMSTREAM_OUT_Q
-      //! DEBUG: write hTile to global memory (has the same memory index as
+      //! DEBUG: write qTile to global memory (has the same memory index as
       //! qTile)
       for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
            ++qWarpTileYIdx) {
@@ -477,6 +475,50 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       }
       __syncthreads();
 
+      //! init cTile to 0
+      // Y: QtileDim, X: cTileStride
+      const uint cWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
+      const uint cWarpBlockXEnd = CEIL_DIV(KVtileDim, WARP_SIZE);
+      for (uint cWarpBlockYIdx = 0; cWarpBlockYIdx < cWarpBlockYEnd;
+           ++cWarpBlockYIdx) {
+        for (uint cWarpBlockXIdx = 0; cWarpBlockXIdx < cWarpBlockXEnd;
+             ++cWarpBlockXIdx) {
+          //? cTileIdxes
+          //* shared memory:
+          const uint cWarpBlockSharedMemYIdx =
+              NUM_WARPS * cWarpBlockYIdx + warpId;
+          const uint cWarpBlockSharedMemXIdx =
+              WARP_SIZE * cWarpBlockXIdx + laneId;
+
+          // set cTile to zero
+          SMEMARRAY(cTile, KVtileDim, cWarpBlockSharedMemYIdx,
+                    cWarpBlockSharedMemXIdx) = 0.0f;
+        }
+      }
+      __syncthreads();
+
+      //! init hTile to 0
+      // Y: QtileDim, X: cTileStride
+      const uint hWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
+      const uint hWarpBlockXEnd = CEIL_DIV(dimHeads, WARP_SIZE);
+      for (uint hWarpBlockYIdx = 0; hWarpBlockYIdx < cWarpBlockYEnd;
+           ++hWarpBlockYIdx) {
+        for (uint hWarpBlockXIdx = 0; hWarpBlockXIdx < cWarpBlockXEnd;
+             ++hWarpBlockXIdx) {
+          //? hTileIdxes
+          //* shared memory:
+          const uint hWarpBlockSharedMemYIdx =
+              NUM_WARPS * hWarpBlockYIdx + warpId;
+          const uint hWarpBlockSharedMemXIdx =
+              WARP_SIZE * hWarpBlockXIdx + laneId;
+
+          // set hTile to zero
+          SMEMARRAY(hTile, dimHeads, hWarpBlockSharedMemYIdx,
+                    hWarpBlockSharedMemXIdx) = 0.0f;
+        }
+      }
+      __syncthreads();
+
       // looplevel 2: loop over KVtile blocks along seqLen dim
       //! For causal computation: kvTileIdx <= qTileIdx * gridDim.y +
       //! blockIdx.y
@@ -506,28 +548,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               cTileBlockYIdx);
         }
 #endif
-
-        //! init cTile to 0
-        // Y: QtileDim, X: cTileStride
-        const uint cWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
-        const uint cWarpBlockXEnd = CEIL_DIV(cTileStride, WARP_SIZE);
-        for (uint cWarpBlockYIdx = 0; cWarpBlockYIdx < cWarpBlockYEnd;
-             ++cWarpBlockYIdx) {
-          for (uint cWarpBlockXIdx = 0; cWarpBlockXIdx < cWarpBlockXEnd;
-               ++cWarpBlockXIdx) {
-            //? cTileIdxes
-            //* shared memory:
-            const uint cWarpBlockSharedMemYIdx =
-                NUM_WARPS * cWarpBlockYIdx + warpId;
-            const uint cWarpBlockSharedMemXIdx =
-                WARP_SIZE * cWarpBlockXIdx + laneId;
-
-            // set cTile to zero
-            SMEMARRAY(cTile, cTileStride, cWarpBlockSharedMemYIdx,
-                      cWarpBlockSharedMemXIdx) = 0.0f;
-          }
-        }
-        __syncthreads();
 
 #ifdef INCL_DMAT_COMP1
         //! construct fTileCol for dTile computation (do only
@@ -1573,7 +1593,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           // hTile
 
           float *hTileWarpBlockSharedMemPtr =
-              (float *)cTile +
+              (float *)hTile +
               (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * NUM_WARPS *
                   qDimIdx +
               (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
@@ -1675,45 +1695,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
           } // end dimHeadsIdx loop
         }   // end qDimIdx loop
-        // __syncthreads();
-
-        // move float hTile at location cTile to location hTile as scalar_t from
-        // where it is written to global memory
-        const uint hWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
-        const uint hWarpBlockXEnd = CEIL_DIV(dimHeads, WARP_SIZE);
-        for (uint hWarpBlockYIdx = 0; hWarpBlockYIdx < cdWarpBlockYEnd;
-             ++hWarpBlockYIdx) {
-          for (uint hWarpBlockXIdx = 0; hWarpBlockXIdx < cdWarpBlockXEnd;
-               ++hWarpBlockXIdx) {
-            //? cTileIdxes
-            //* shared memory:
-            const uint hWarpBlockSharedMemYIdx =
-                NUM_WARPS * hWarpBlockYIdx + warpId;
-            const uint hWarpBlockSharedMemXIdx =
-                WARP_SIZE * hWarpBlockXIdx + laneId;
-
-            SMEMARRAY(hTile, dimHeads, hWarpBlockSharedMemYIdx,
-                      hWarpBlockSharedMemXIdx) =
-                float2type<scalar_t>(SMEMARRAY(cTile, dimHeads,
-                                               hWarpBlockSharedMemYIdx,
-                                               hWarpBlockSharedMemXIdx));
-#ifdef DEBUG_SV_TENSORCORE2
-            if (blockIdx.x == 0 && blockIdx.y == 0 && (warpId <= 4) &&
-                (hWarpBlockSharedMemXIdx == 0 ||
-                 hWarpBlockSharedMemXIdx == 16)) {
-              printf("qTLdx=%d|kvTLdx=%d: wId=%d|lId=%d,TidxX=%d: "
-                     "hWBIdxXY(%d,%d), hTileSMXY(%d,%d)=%f\n",
-                     qTileIdx, kvTileIdx, warpId, laneId, threadIdx.x,
-                     hWarpBlockXIdx, hWarpBlockYIdx, hWarpBlockSharedMemXIdx,
-                     hWarpBlockSharedMemYIdx,
-                     SMEMARRAY(cTile, dimHeads, hWarpBlockSharedMemYIdx,
-                               hWarpBlockSharedMemXIdx));
-            }
-            // __syncthreads();
-#endif // DEBUG_SV_TENSORCORE2
-          }
-        }
         __syncthreads();
+
 #endif // COMPUTE_SV_TENSORCORE
 
 #ifdef INCL_DMAT_COMP
@@ -1847,34 +1830,80 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
       //   gridGroup.sync();
 
       //! Store hTile to global memory
-      // see qTile write to global memory for reference
-      for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
-           ++qWarpTileYIdx) {
-        for (uint qWarpTileXIdx = 0; qWarpTileXIdx < qWarpTileXEnd;
-             ++qWarpTileXIdx) {
-          //? qWarpTileIdxes
+      // move float hTile at location cTile to location hTile as scalar_t from
+      // where it is written to global memory
+      //   const uint hWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
+      //   const uint hWarpBlockXEnd = CEIL_DIV(dimHeads, WARP_SIZE);
+      for (uint hWarpBlockYIdx = 0; hWarpBlockYIdx < hWarpBlockYEnd;
+           ++hWarpBlockYIdx) {
+        for (uint hWarpBlockXIdx = 0; hWarpBlockXIdx < hWarpBlockXEnd;
+             ++hWarpBlockXIdx) {
+          //? hTileIdxes
           //* shared memory:
-          const uint qWarpBlockSharedMemYIdx =
-              GMEM_LOAD_BLOCK_ROWS_Y * qWarpTileYIdx + rowGmemTidxY;
+          const uint hWarpBlockSharedMemYIdx =
+              NUM_WARPS * hWarpBlockYIdx + warpId;
+          const uint hWarpBlockSharedMemXIdx =
+              WARP_SIZE * hWarpBlockXIdx + laneId;
 
-          const uint qWarpBlockSharedMemXIdx =
-              GMEM_LOAD_BLOCK_2BITEMS_X * qWarpTileXIdx;
+          float h_acc_val = SMEMARRAY(hTile, dimHeads, hWarpBlockSharedMemYIdx,
+                                      hWarpBlockSharedMemXIdx);
 
-          scalar_t *hTileWarpBlockSharedMemPtr =
-              (scalar_t *)hTile +
-              (dimHeads + SMEM_PADDING_TILE_2B) * qWarpBlockSharedMemYIdx +
-              qWarpBlockSharedMemXIdx;
+          //* global memory:
+          const uint hWarpBlockGlobalMemIdx =
+              qTileBlockGlobalMemIdx + (dimHeads * NUM_WARPS) * hWarpBlockYIdx +
+              WARP_SIZE * hWarpBlockXIdx;
+          const uint hThreadGlobalMemIdx =
+              hWarpBlockGlobalMemIdx + dimHeads * warpId + laneId;
 
-          // no memory padding for global memory:
-          scalar_t *matHTileWarpBlockGlobalMemPtr =
-              (scalar_t *)matH + qTileBlockGlobalMemIdx +
-              (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
+          matH[hThreadGlobalMemIdx] = float2type<scalar_t>(h_acc_val);
 
-          *(((float4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
-              *(((float4 *)(hTileWarpBlockSharedMemPtr)) + colGmemTidxX);
+#ifdef DEBUG_SV_TENSORCORE2
+          if (blockIdx.x == 0 && blockIdx.y == 0 && (warpId <= 4) &&
+              (hWarpBlockSharedMemXIdx == 0 || hWarpBlockSharedMemXIdx == 16)) {
+            printf("qTLdx=%d: wId=%d|lId=%d,TidxX=%d: "
+                   "hWBIdxXY(%d,%d), hTileSMXY(%d,%d)=%f\n",
+                   qTileIdx, warpId, laneId, threadIdx.x, hWarpBlockXIdx,
+                   hWarpBlockYIdx, hWarpBlockSharedMemXIdx,
+                   hWarpBlockSharedMemYIdx,
+                   SMEMARRAY(hTile, dimHeads, hWarpBlockSharedMemYIdx,
+                             hWarpBlockSharedMemXIdx));
+          }
+          // __syncthreads();
+#endif // DEBUG_SV_TENSORCORE2
         }
       }
-      __syncthreads(); // TODO: necessary?
+      __syncthreads();
+
+      // deprecated since we need to cast to scalar_t beforehand
+      //   // see qTile write to global memory for reference
+      //   for (uint qWarpTileYIdx = 0; qWarpTileYIdx < qWarpTileYEnd;
+      //        ++qWarpTileYIdx) {
+      //     for (uint qWarpTileXIdx = 0; qWarpTileXIdx < qWarpTileXEnd;
+      //          ++qWarpTileXIdx) {
+
+      //       //? qWarpTileIdxes
+      //       //* shared memory:
+      //       const uint qWarpBlockSharedMemYIdx =
+      //           GMEM_LOAD_BLOCK_ROWS_Y * qWarpTileYIdx + rowGmemTidxY;
+
+      //       const uint qWarpBlockSharedMemXIdx =
+      //           GMEM_LOAD_BLOCK_2BITEMS_X * qWarpTileXIdx;
+
+      //       scalar_t *hTileWarpBlockSharedMemPtr =
+      //           (scalar_t *)hTile +
+      //           (dimHeads + SMEM_PADDING_TILE_2B) * qWarpBlockSharedMemYIdx +
+      //           qWarpBlockSharedMemXIdx;
+
+      //       // no memory padding for global memory:
+      //       scalar_t *matHTileWarpBlockGlobalMemPtr =
+      //           (scalar_t *)matH + qTileBlockGlobalMemIdx +
+      //           (dimHeads)*qWarpBlockSharedMemYIdx + qWarpBlockSharedMemXIdx;
+
+      //       *(((float4 *)(matHTileWarpBlockGlobalMemPtr)) + colGmemTidxX) =
+      //           *(((float4 *)(hTileWarpBlockSharedMemPtr)) + colGmemTidxX);
+      //     }
+      //   }
+      //   __syncthreads(); // TODO: necessary?
 
 #ifdef INCL_DMAT_COMP
       //* global memory:
@@ -1958,13 +1987,14 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // SHARED_MEM_PADDING)
   // - Output tile: hTile -> (QtileDim, dimHeads + SHARED_MEM_PADDING)
 
-  const uint qhTileSharedMemSize =
+  const uint qTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (dimHeads + SMEM_PADDING_TILE_2B);
+  const uint hTileSharedMemSize =
+      sizeof(float) * QtileDim * (dimHeads + SMEM_PADDING_TILE_2B);
   const uint kvTileSharedMemSize =
       sizeof(scalar_t) * KVtileDim * (dimHeads + SMEM_PADDING_TILE_2B);
   const uint cTileSharedMemSize =
-      sizeof(float) * QtileDim *
-      (std::max(KVtileDim, dimHeads) + SMEM_PADDING_TILE_2B);
+      sizeof(float) * QtileDim * (KVtileDim + SMEM_PADDING_TILE_2B);
   const uint dTileSharedMemSize =
       sizeof(scalar_t) * QtileDim * (KVtileDim + SMEM_PADDING_TILE_2B);
 
@@ -1991,9 +2021,10 @@ void kernel_dispatchers::vlstm_fw_dispatch(
   // Intermediate tiles: 2x for cTile, dTile
   // Intermediate tiles: 2x for mChunk, lChunk
   const uint sharedMemorySize =
-      2 * qhTileSharedMemSize + 1 * kvTileSharedMemSize +
-      1 * cTileSharedMemSize + 1 * dTileSharedMemSize + iChunkSharedMemSize +
-      fChunkSharedMemSize + fTileColSharedMemSize + 6 * nmlChunkSharedMemSize;
+      1 * qTileSharedMemSize + 1 * hTileSharedMemSize +
+      1 * kvTileSharedMemSize + 1 * cTileSharedMemSize +
+      1 * dTileSharedMemSize + iChunkSharedMemSize + fChunkSharedMemSize +
+      fTileColSharedMemSize + 6 * nmlChunkSharedMemSize;
 
   printf("blocksxy: %d-%d, threadsxy: %d-%d, QtileDim: %d, KVtileDim: %d, "
          "shared_mem in bytes: %d\n",
