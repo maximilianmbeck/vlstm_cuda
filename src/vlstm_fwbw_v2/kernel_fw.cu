@@ -142,7 +142,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 // #define OUTPUT_matD 1
 // #define OUTPUT_matS 1
-#define OUTPUT_matS_casted 1
+// #define OUTPUT_matS_casted 1
 // #define OUTPUT_matCtilde 1
 
 #define COMPUTE_QK_TENSORCORE 1
@@ -1266,6 +1266,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 #ifdef INCL_DMAT_COMP2
         //! compute C_tilde: multiply S with dTile, i.e. fill cTile
+        //! C_tilde = S * exp(dTile - m)
         //! compute "raw normalizer" l: rowsum of cTile
         //! compute normalizer n: max(abs(l),exp(-m))
         // use flattened threads for the rowsum, i.e. each thread computes the
@@ -1504,6 +1505,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
 #ifdef COMPUTE_SV_TENSORCORE
         // TODO here: remove this move operation, dTile contains S * D
+#ifdef OUTPUT_matS_casted
         // move cTile to dTile and cast float to scalar_t
         const uint cdWarpBlockYEnd = CEIL_DIV(QtileDim, NUM_WARPS);
         const uint cdWarpBlockXEnd = CEIL_DIV(KVtileDim, WARP_SIZE);
@@ -1530,7 +1532,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           }
         }
         __syncthreads();
-#ifdef OUTPUT_matS_casted
         //! DEBUG only: write casted sTile to global memory
         // left upper corner of cWarpTileBlock in C (global memory)
         //* cdTile Global Memory Index (Debug only)
@@ -1574,6 +1575,13 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
         const uint dimHeadsSVEnd = CEIL_DIV(dimHeads, KVDH_NTC_DIM);
 
+        // ends cTildeTileWarpBlock / hTileWarpBlock
+        const uint cTildeWarpYEnd = CEIL_DIV(Q_MTC_DIM, NUM_WARPS);
+        const uint cTildeWarpXEnd = CEIL_DIV(KVtileDim, WARP_SIZE);
+
+        const uint hWarpYEnd = CEIL_DIV(Q_MTC_DIM, NUM_WARPS);
+        const uint hWarpXEnd = CEIL_DIV(dimHeads, WARP_SIZE);
+
         // qDim loop (parallelize over warps)
         for (uint qDimIdx = 0; qDimIdx < qDimEnd; ++qDimIdx) {
 
@@ -1584,14 +1592,86 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   qDimIdx +
               (KVtileDim + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
 
-          // TODO here: divide Ctilde by n
-          // each warp does its part of the normalization
+          //   divide Ctilde by n
+          //   each warp does its part of the normalization
+          for (uint cTildeWarpRowYIdx = 0; cTildeWarpRowYIdx < cTildeWarpYEnd;
+               ++cTildeWarpRowYIdx) {
+
+            //? cTileIdxes
+            //* shared memory
+            const uint cTildeWarpSharedMemYIdx =
+                NUM_WARPS * cTildeWarpRowYIdx + warpId;
+
+            // every thread in warp loads same n_val (row-wise)
+            scalar_t n_val = SMEMVECTOR(nChunk, cTildeWarpSharedMemYIdx);
+
+            for (uint cTildeWarpColXIdx = 0; cTildeWarpColXIdx < cTildeWarpXEnd;
+                 ++cTildeWarpRowYIdx) {
+              //? cTileIdxes
+              //* shared memory
+              const uint cTildeWarpSharedMemXIdx =
+                  WARP_SIZE * cTildeWarpColXIdx + laneId;
+
+              scalar_t *cTildeTileThreadSharedMemPtr =
+                  cTildeTileWarpBlockSharedMemPtr +
+                  (KVtileDim + SMEM_PADDING_TILE_2B) * cTildeWarpSharedMemYIdx +
+                  cTildeWarpSharedMemXIdx;
+
+              //   scalar_t c_tilde_val = *cTildeTileThreadSharedMemPtr;
+              //   scalar_t c_val = div_g(c_tilde_val, n_val);
+              //   *cTildeTileThreadSharedMemPtr = c_val;
+            }
+          }
+          __syncthreads();
 
           float *hTileWarpBlockSharedMemPtr =
               (float *)hTile +
               (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * NUM_WARPS *
                   qDimIdx +
               (dimHeads + SMEM_PADDING_TILE_2B) * Q_MTC_DIM * warpId;
+
+          // multiply hTile (old) with exp(m_old - m_new) *
+          // n_old/n_new
+          //   if (kvTileIdx > 0) {
+          //     for (uint hWarpRowYIdx = 0; hWarpRowYIdx < hWarpYEnd;
+          //          ++hWarpRowYIdx) {
+
+          //       //? hTileIdxes
+          //       //* shared memory
+          //       const uint hWarpSharedMemYIdx = NUM_WARPS * hWarpRowYIdx +
+          //       warpId;
+
+          //       scalar_t n_val = SMEMVECTOR(nChunk, hWarpSharedMemYIdx);
+          //       scalar_t n_prev_val = SMEMVECTOR(nPrevChunk,
+          //       hWarpSharedMemYIdx); scalar_t m_val = SMEMVECTOR(mChunk,
+          //       hWarpSharedMemYIdx); scalar_t m_prev_val =
+          //       SMEMVECTOR(mPrevChunk, hWarpSharedMemYIdx);
+
+          //       for (uint hWarpColXIdx = 0; hWarpColXIdx < hWarpBlockXEnd;
+          //            ++hWarpColXIdx) {
+          //         //? hTileIdxes
+          //         //* shared memory
+          //         const uint hWarpSharedMemXIdx =
+          //             WARP_SIZE * hWarpSharedMemXIdx + laneId;
+
+          //         float *hTileThreadSharedMemPtr =
+          //             hTileWarpBlockSharedMemPtr +
+          //             (dimHeads + SMEM_PADDING_TILE_2B) * hWarpSharedMemYIdx
+          //             + hWarpSharedMemXIdx;
+
+          //         float hTile_val = *hTileThreadSharedMemPtr;
+          //         scalar_t weighting_factor_h_prev = div_g(
+          //             mul_g(exp_g(sub_g(m_prev_val, m_val)), n_prev_val),
+          //             n_val);
+
+          //         float hTile_weighted_val =
+          //             mul_g(hTile_val, type2float(weighting_factor_h_prev));
+
+          //         *hTileThreadSharedMemPtr = hTile_weighted_val;
+          //       }
+          //     }
+          //     __syncthreads();
+          //   }
 
           //* (warp) offset Y-axis in Ctilde = (Q K^T) * D
           const uint cTildeTileWarpYIdx = cTileBlockYIdx +
@@ -1615,9 +1695,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             if (kvTileIdx == 0) {
               nv::wmma::fill_fragment(hFrag, 0.0f);
             } else {
-              // TODO here: multiply hTile (old) with exp(m_old - m_new) *
-              // n_old/n_new
-
               // load hTile from shared memory
               nv::wmma::load_matrix_sync(hFrag, hTileWarpFragmentSharedMemPtr,
                                          dimHeads + SMEM_PADDING_TILE_2B,
