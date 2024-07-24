@@ -1606,7 +1606,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
             scalar_t n_val = SMEMVECTOR(nChunk, cTildeWarpSharedMemYIdx);
 
             for (uint cTildeWarpColXIdx = 0; cTildeWarpColXIdx < cTildeWarpXEnd;
-                 ++cTildeWarpRowYIdx) {
+                 ++cTildeWarpColXIdx) {
               //? cTileIdxes
               //* shared memory
               const uint cTildeWarpSharedMemXIdx =
@@ -1617,9 +1617,9 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                   (KVtileDim + SMEM_PADDING_TILE_2B) * cTildeWarpSharedMemYIdx +
                   cTildeWarpSharedMemXIdx;
 
-              //   scalar_t c_tilde_val = *cTildeTileThreadSharedMemPtr;
-              //   scalar_t c_val = div_g(c_tilde_val, n_val);
-              //   *cTildeTileThreadSharedMemPtr = c_val;
+              scalar_t c_tilde_val = *cTildeTileThreadSharedMemPtr;
+              scalar_t c_val = div_g(c_tilde_val, n_val);
+              *cTildeTileThreadSharedMemPtr = c_val;
             }
           }
           __syncthreads();
@@ -1632,46 +1632,43 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 
           // multiply hTile (old) with exp(m_old - m_new) *
           // n_old/n_new
-          //   if (kvTileIdx > 0) {
-          //     for (uint hWarpRowYIdx = 0; hWarpRowYIdx < hWarpYEnd;
-          //          ++hWarpRowYIdx) {
+          if (kvTileIdx > 0) {
+            for (uint hWarpRowYIdx = 0; hWarpRowYIdx < hWarpYEnd;
+                 ++hWarpRowYIdx) {
 
-          //       //? hTileIdxes
-          //       //* shared memory
-          //       const uint hWarpSharedMemYIdx = NUM_WARPS * hWarpRowYIdx +
-          //       warpId;
+              //? hTileIdxes
+              //* shared memory
+              const uint hWarpSharedMemYIdx = NUM_WARPS * hWarpRowYIdx + warpId;
 
-          //       scalar_t n_val = SMEMVECTOR(nChunk, hWarpSharedMemYIdx);
-          //       scalar_t n_prev_val = SMEMVECTOR(nPrevChunk,
-          //       hWarpSharedMemYIdx); scalar_t m_val = SMEMVECTOR(mChunk,
-          //       hWarpSharedMemYIdx); scalar_t m_prev_val =
-          //       SMEMVECTOR(mPrevChunk, hWarpSharedMemYIdx);
+              scalar_t n_val = SMEMVECTOR(nChunk, hWarpSharedMemYIdx);
+              scalar_t n_prev_val = SMEMVECTOR(nPrevChunk, hWarpSharedMemYIdx);
+              scalar_t m_val = SMEMVECTOR(mChunk, hWarpSharedMemYIdx);
+              scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, hWarpSharedMemYIdx);
 
-          //       for (uint hWarpColXIdx = 0; hWarpColXIdx < hWarpBlockXEnd;
-          //            ++hWarpColXIdx) {
-          //         //? hTileIdxes
-          //         //* shared memory
-          //         const uint hWarpSharedMemXIdx =
-          //             WARP_SIZE * hWarpSharedMemXIdx + laneId;
+              for (uint hWarpColXIdx = 0; hWarpColXIdx < hWarpXEnd;
+                   ++hWarpColXIdx) {
+                //? hTileIdxes
+                //* shared memory
+                const uint hWarpSharedMemXIdx =
+                    WARP_SIZE * hWarpColXIdx + laneId;
 
-          //         float *hTileThreadSharedMemPtr =
-          //             hTileWarpBlockSharedMemPtr +
-          //             (dimHeads + SMEM_PADDING_TILE_2B) * hWarpSharedMemYIdx
-          //             + hWarpSharedMemXIdx;
+                float *hTileThreadSharedMemPtr =
+                    hTileWarpBlockSharedMemPtr +
+                    (dimHeads + SMEM_PADDING_TILE_2B) * hWarpSharedMemYIdx +
+                    hWarpSharedMemXIdx;
 
-          //         float hTile_val = *hTileThreadSharedMemPtr;
-          //         scalar_t weighting_factor_h_prev = div_g(
-          //             mul_g(exp_g(sub_g(m_prev_val, m_val)), n_prev_val),
-          //             n_val);
+                float hTile_val = *hTileThreadSharedMemPtr;
+                scalar_t weighting_factor_h_prev = div_g(
+                    mul_g(exp_g(sub_g(m_prev_val, m_val)), n_prev_val), n_val);
 
-          //         float hTile_weighted_val =
-          //             mul_g(hTile_val, type2float(weighting_factor_h_prev));
+                float hTile_weighted_val =
+                    mul_g(hTile_val, type2float(weighting_factor_h_prev));
 
-          //         *hTileThreadSharedMemPtr = hTile_weighted_val;
-          //       }
-          //     }
-          //     __syncthreads();
-          //   }
+                *hTileThreadSharedMemPtr = hTile_weighted_val;
+              }
+            }
+            __syncthreads();
+          }
 
           //* (warp) offset Y-axis in Ctilde = (Q K^T) * D
           const uint cTildeTileWarpYIdx = cTileBlockYIdx +
@@ -1874,6 +1871,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           } // end hWarpTileXIdx
         }   // end hWarpTileYIdx
         __syncthreads();
+#endif // INCL_DMAT_COMP
 
         //! move to next kvTileIdx
         // update lPrevChunk, mPrevChunk, nPrevChunk
@@ -1894,7 +1892,6 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
           }
         }
         __syncthreads();
-#endif // INCL_DMAT_COMP
 
       } // end looplevel 2: kvTileIdx
 
