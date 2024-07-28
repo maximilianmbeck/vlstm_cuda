@@ -183,6 +183,8 @@ def _mlstm_fwd(
 
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
+    # tl.static_print("q", q)
+
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
     # acc, l_i, m_i = _attn_fwd_inner(
@@ -229,12 +231,18 @@ def mlstm_fw(
 
     matH = torch.empty_like(matQ)
 
+    # grid = lambda args: (
+    #     triton.cdiv(matQ.shape[2], args["BLOCK_Q"]),
+    #     matQ.shape[0] * matQ.shape[1],
+    #     1,
+    # )
+    # fix grid for debugging
     grid = lambda args: (
-        triton.cdiv(matQ.shape[2], args["BLOCK_Q"]),
+        triton.cdiv(matQ.shape[2], BLOCK_Q),
         matQ.shape[0] * matQ.shape[1],
         1,
     )
-
+    print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
     vecN = torch.empty(
         (matQ.shape[0], matQ.shape[1], matQ.shape[2]),
         device=matQ.device,
