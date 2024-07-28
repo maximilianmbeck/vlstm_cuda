@@ -12,7 +12,7 @@ Goals:
 
 
 @triton.jit
-def _attn_fwd_inner(
+def _qkv_fwd_inner(
     acc,
     l_i,
     m_i,
@@ -28,7 +28,6 @@ def _attn_fwd_inner(
     offs_m: tl.constexpr,
     offs_n: tl.constexpr,  #
     N_CTX: tl.constexpr,
-    fp8_v: tl.constexpr,
 ):
     # range of values handled by this stage
     if STAGE == 1:
@@ -64,10 +63,6 @@ def _attn_fwd_inner(
         acc = acc * alpha[:, None]
         # update acc
         v = tl.load(V_block_ptr)
-        if fp8_v:
-            p = p.to(tl.float8e5)
-        else:
-            p = p.to(tl.float16)
         acc = tl.dot(p, v, acc)
         # update m_i and l_i
         m_i = m_ij
@@ -102,7 +97,7 @@ BLOCK_KV = 32
 
 # @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
-def _mlstm_fwd(
+def _qkv_fwd(
     matQ,
     matK,
     matV,
@@ -219,12 +214,10 @@ def _mlstm_fwd(
     tl.store(H_block_ptr, q.to(matH.type.element_ty))
 
 
-def mlstm_fw(
+def qkv_fw(
     matQ: torch.Tensor,
     matK: torch.Tensor,
     matV: torch.Tensor,
-    vecI: torch.Tensor,
-    vecF: torch.Tensor,
 ) -> torch.Tensor:
     # batch size, number of heads, sequence length, head dimension
     BS, NH, SL, DH = matQ.shape
@@ -260,7 +253,7 @@ def mlstm_fw(
         dtype=torch.float32,
     )
 
-    _mlstm_fwd[grid](
+    _qkv_fwd[grid](
         matQ=matQ,
         matK=matK,
         matV=matV,
