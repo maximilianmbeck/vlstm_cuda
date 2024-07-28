@@ -183,7 +183,13 @@ def _mlstm_fwd(
 
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
-    # tl.static_print("q", q)
+    tl.static_print("q", q)
+    k = tl.load(K_block_ptr)
+    tl.static_print("k", k)
+    v = tl.load(V_block_ptr)
+    tl.static_print("v", v)
+    tl.static_print("qk_scale", qk_scale)
+    tl.device_print("qk_scale", qk_scale)
 
     # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
     # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE

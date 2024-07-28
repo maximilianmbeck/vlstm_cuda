@@ -11,6 +11,79 @@ The tiled version is used for the kernel implementation of the model.
 """
 
 
+def construct_log_gate_matrix_paper(
+    fgs: torch.Tensor, igs: torch.Tensor
+) -> torch.Tensor:
+    _device = fgs.device
+    _dtype = fgs.dtype
+    B, NH, S, _ = fgs.shape
+    ltr = torch.tril(
+        torch.ones(
+            (S, S),
+            dtype=torch.bool,
+            device=_device,
+        )
+    )
+    log_fgates_cumsum = torch.cat(
+        [
+            torch.zeros((B, NH, 1, 1), dtype=_dtype, device=_device),
+            torch.cumsum(fgs, dim=-2),
+        ],
+        dim=-2,
+    )  # (B, NH, S+1, 1)
+    # for each batch/head this is a matrix of shape (S+1, S+1) containing the cumsum of the log forget gate values
+    # in the second dimension (colum dimension). Each row has the same is a copy of the first row.
+    # First entry of each row is zero.
+    rep_log_fgates_cumsum = log_fgates_cumsum.repeat(
+        1, 1, 1, S + 1
+    )  # (B, NH, S+1, S+1)
+    # Now in each row cut off / subtract the forgetgate values of the later timesteps
+    # where col j > row i
+    _log_fg_matrix = rep_log_fgates_cumsum - rep_log_fgates_cumsum.transpose(
+        -2, -1
+    )  # (B, NH, S+1, S+1)
+    # Causal masking & selection of the correct submatrix, such that forgetgate at timestep t is not applied
+    # to the input at timestep t
+    log_fg_matrix = torch.where(
+        ltr, _log_fg_matrix[:, :, 1:, 1:], -float("inf")
+    )  # (B, NH, S, S)
+
+    # gate decay matrix D (combination of forget gate and input gate)
+    log_D_matrix = log_fg_matrix + igs.transpose(-2, -1)  # (B, NH, S, S)
+    return log_D_matrix
+
+
+def constuct_log_gate_matrix_tiled(
+    fgs: torch.Tensor,
+    igs: torch.Tensor,
+    BQ: int,
+    BKV: int,
+    idx_BQ: int,
+    idx_BKV,
+    fgs_cs: torch.Tensor = None,
+) -> torch.Tensor:
+    B, NH, S = fgs.shape
+    if fgs_cs is None:
+        fgs_cs = torch.cumsum(fgs, dim=-1)
+    fgs_cs_chunk_Q = fgs_cs[:, :, idx_BQ * BQ : (idx_BQ + 1) * BQ]
+    fgs_cs_chunk_KV = fgs_cs[:, :, idx_BKV * BKV : (idx_BKV + 1) * BKV]
+
+    fgate_tile = fgs_cs_chunk_Q[:, :, :, None] - fgs_cs_chunk_KV[:, :, None, :]
+
+    igs_chunk = igs[:, :, idx_BKV * BKV : (idx_BKV + 1) * BKV]
+    log_D_matrix = fgate_tile + igs_chunk
+
+    # causal masking
+    if idx_BKV * BKV >= idx_BQ * BQ:
+        bq_idxes = torch.arange(idx_BQ * BQ, (idx_BQ + 1) * BQ)
+        kv_idxes = torch.arange(idx_BKV * BKV, (idx_BKV + 1) * BKV)
+        idx_mask = (
+            bq_idxes[:, None] - kv_idxes[None, :]
+        )  # or bq_idxes[:, None] >= kv_idxes[None, :]
+        log_D_matrix = torch.where(idx_mask < 0, -float("inf"), log_D_matrix)
+    return log_D_matrix
+
+
 def vlstm_parallel_tiled(
     queries: torch.Tensor,
     keys: torch.Tensor,
