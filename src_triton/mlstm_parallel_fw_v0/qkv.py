@@ -14,61 +14,35 @@ Goals:
 @triton.jit
 def _qkv_fwd_inner(
     acc,
-    l_i,
-    m_i,
     q,  #
     K_block_ptr,
     V_block_ptr,  #
     start_m,
     qk_scale,  #
-    BLOCK_M: tl.constexpr,
+    BLOCK_Q: tl.constexpr,
     HEAD_DIM: tl.constexpr,
-    BLOCK_N: tl.constexpr,  #
-    STAGE: tl.constexpr,
-    offs_m: tl.constexpr,
-    offs_n: tl.constexpr,  #
+    BLOCK_KV: tl.constexpr,  #
     N_CTX: tl.constexpr,
 ):
     # range of values handled by this stage
-    if STAGE == 1:
-        lo, hi = 0, start_m * BLOCK_M
-    elif STAGE == 2:
-        lo, hi = start_m * BLOCK_M, (start_m + 1) * BLOCK_M
-        lo = tl.multiple_of(lo, BLOCK_M)
-    # causal = False
-    else:
-        lo, hi = 0, N_CTX
+    lo, hi = start_m * BLOCK_Q, (start_m + 1) * BLOCK_Q
+    # lo = tl.multiple_of(lo, BLOCK_M)
     K_block_ptr = tl.advance(K_block_ptr, (0, lo))
     V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
     # loop over k, v and update accumulator
-    for start_n in range(lo, hi, BLOCK_N):
-        start_n = tl.multiple_of(start_n, BLOCK_N)
+    for start_n in range(lo, hi, BLOCK_KV):
+        start_n = tl.multiple_of(start_n, BLOCK_KV)
         # -- compute qk ----
         k = tl.load(K_block_ptr)
         qk = tl.dot(q, k)
-        if STAGE == 2:
-            mask = offs_m[:, None] >= (start_n + offs_n[None, :])
-            qk = qk * qk_scale + tl.where(mask, 0, -1.0e6)
-            m_ij = tl.maximum(m_i, tl.max(qk, 1))
-            qk -= m_ij[:, None]
-        else:
-            m_ij = tl.maximum(m_i, tl.max(qk, 1) * qk_scale)
-            qk = qk * qk_scale - m_ij[:, None]
-        p = tl.math.exp2(qk)
-        l_ij = tl.sum(p, 1)
-        # -- update m_i and l_i
-        alpha = tl.math.exp2(m_i - m_ij)
-        l_i = l_i * alpha + l_ij
-        # -- update output accumulator --
-        acc = acc * alpha[:, None]
-        # update acc
+        qk = qk * qk_scale
+        # -- compute qkv -- update acc
         v = tl.load(V_block_ptr)
-        acc = tl.dot(p, v, acc)
-        # update m_i and l_i
-        m_i = m_ij
-        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_N, 0))
-        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_N))
-    return acc, l_i, m_i
+        acc = tl.dot(qk, v, acc)
+
+        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_KV, 0))
+        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_KV))
+    return acc
 
 
 # We don't run auto-tuning every time to keep the tutorial fast. Keeping
@@ -134,7 +108,7 @@ def _qkv_fwd(
     off_z = off_hz // H
     off_h = off_hz % H
     qvk_offset = off_z.to(tl.int64) * stride_qz + off_h.to(tl.int64) * stride_qh
-
+    # tl.device_print("qvk_offset, ", q)
     # block pointers
     Q_block_ptr = tl.make_block_ptr(
         base=matQ + qvk_offset,
@@ -150,11 +124,11 @@ def _qkv_fwd(
         strides=(stride_vk, stride_vn),
         offsets=(0, 0),
         block_shape=(BLOCK_KV, HEAD_DIM),
-        order=(0, 1),
+        order=(1, 0),
     )
     K_block_ptr = tl.make_block_ptr(
         base=matK + qvk_offset,
-        shape=(HEAD_DIM, N_CTX),
+        shape=(N_CTX, HEAD_DIM),
         strides=(stride_kk, stride_kn),
         offsets=(0, 0),
         block_shape=(HEAD_DIM, BLOCK_KV),
@@ -168,50 +142,34 @@ def _qkv_fwd(
         block_shape=(BLOCK_Q, HEAD_DIM),
         order=(1, 0),
     )
-    # initialize offsets
-    offs_m = start_m * BLOCK_Q + tl.arange(0, BLOCK_Q)
-    offs_n = tl.arange(0, BLOCK_KV)
-    # initialize pointer to m and l
-    m_i = tl.zeros([BLOCK_Q], dtype=tl.float32) - float("inf")
-    l_i = tl.zeros([BLOCK_Q], dtype=tl.float32) + 1.0
+
+    # initialize accumulator
     acc = tl.zeros([BLOCK_Q, HEAD_DIM], dtype=tl.float32)
 
     # load q: it will stay in SRAM throughout
     q = tl.load(Q_block_ptr)
-    tl.static_print("q", q)
-    k = tl.load(K_block_ptr)
-    tl.static_print("k", k)
-    v = tl.load(V_block_ptr)
-    tl.static_print("v", v)
-    tl.static_print("qk_scale", qk_scale)
-    tl.device_print("qk_scale", qk_scale)
 
-    # For causal = True, STAGE = 3 and _attn_fwd_inner gets 1 as its STAGE
-    # For causal = False, STAGE = 1, and _attn_fwd_inner gets 3 as its STAGE
-    # acc, l_i, m_i = _attn_fwd_inner(
-    #     acc,
-    #     l_i,
-    #     m_i,
-    #     q,
-    #     K_block_ptr,
-    #     V_block_ptr,  #
-    #     start_m,
-    #     qk_scale,  #
-    #     BLOCK_Q,
-    #     HEAD_DIM,
-    #     BLOCK_KV,  #
-    #     4 - STAGE,
-    #     offs_m,
-    #     offs_n,
-    #     N_CTX,
-    #     V.dtype.element_ty == tl.float8e5,  #
-    # )
+    lo, hi = 0, N_CTX
+    lo = tl.multiple_of(lo, BLOCK_Q)
+    K_block_ptr = tl.advance(K_block_ptr, (0, lo))
+    V_block_ptr = tl.advance(V_block_ptr, (lo, 0))
+    # loop over k, v and update accumulator
+    for start_n in range(lo, hi, BLOCK_KV):
+        start_n = tl.multiple_of(start_n, BLOCK_KV)
+        # -- compute qk ----
+        k = tl.load(K_block_ptr)
+        qk = tl.dot(q, k)
+        qk = qk / qk_scale
+        qk = qk.to(tl.float16)
+        # -- compute qkv -- update acc
+        v = tl.load(V_block_ptr)
+        acc = tl.dot(qk, v, acc)
+
+        V_block_ptr = tl.advance(V_block_ptr, (BLOCK_KV, 0))
+        K_block_ptr = tl.advance(K_block_ptr, (0, BLOCK_KV))
+
     # epilogue
-    # m_i += tl.math.log2(l_i)
-    # acc = acc / l_i[:, None]
-    # m_ptrs = vecM + off_hz * N_CTX + offs_m
-    # tl.store(m_ptrs, m_i)
-    tl.store(H_block_ptr, q.to(matH.type.element_ty))
+    tl.store(H_block_ptr, acc.to(matH.type.element_ty))
 
 
 def qkv_fw(
