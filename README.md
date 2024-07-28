@@ -173,6 +173,8 @@ We do not focus on backward kernel for now, hence only the fw kernel will be mod
     - drop float32 support.
     - setup kernel constraints.
     - load qTile from global to shared mem with warps with float4, needed to set correct shared mem padding.
+    - 24.7.: S = QK^T, H = S*V working, D mat computation working, H reweighting not yet working!
+    - TODO from here: check cTilde tile, m, n computation
 
 #### Shared Memory requirements
 

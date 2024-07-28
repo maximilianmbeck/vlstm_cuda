@@ -140,7 +140,7 @@ __global__ void vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 // #define DEBUG_SV_TENSORCORE1 1
 // #define DEBUG_SV_TENSORCORE2 1
 
-// #define OUTPUT_matD 1
+#define OUTPUT_matD 1
 // #define OUTPUT_matS 1
 // #define OUTPUT_matS_casted 1
 // #define OUTPUT_matCtilde 1
@@ -1265,6 +1265,8 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
 #endif
 
 #ifdef INCL_DMAT_COMP2
+        //! IMPORTANT: we refunction dTile here: it now contains c_tilde
+
         //! compute C_tilde: multiply S with dTile, i.e. fill cTile
         //! C_tilde = S * exp(dTile - m)
         //! compute "raw normalizer" l: rowsum of cTile
@@ -1640,10 +1642,12 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
               //* shared memory
               const uint hWarpSharedMemYIdx = NUM_WARPS * hWarpRowYIdx + warpId;
 
-              scalar_t n_val = SMEMVECTOR(nChunk, hWarpSharedMemYIdx);
-              scalar_t n_prev_val = SMEMVECTOR(nPrevChunk, hWarpSharedMemYIdx);
-              scalar_t m_val = SMEMVECTOR(mChunk, hWarpSharedMemYIdx);
-              scalar_t m_prev_val = SMEMVECTOR(mPrevChunk, hWarpSharedMemYIdx);
+              float n_val = type2float(SMEMVECTOR(nChunk, hWarpSharedMemYIdx));
+              float n_prev_val =
+                  type2float(SMEMVECTOR(nPrevChunk, hWarpSharedMemYIdx));
+              float m_val = type2float(SMEMVECTOR(mChunk, hWarpSharedMemYIdx));
+              float m_prev_val =
+                  type2float(SMEMVECTOR(mPrevChunk, hWarpSharedMemYIdx));
 
               for (uint hWarpColXIdx = 0; hWarpColXIdx < hWarpXEnd;
                    ++hWarpColXIdx) {
@@ -1658,7 +1662,7 @@ kernels::vlstm_fw(scalar_t *matH, scalar_t *vecN, scalar_t *vecM,
                     hWarpSharedMemXIdx;
 
                 float hTile_val = *hTileThreadSharedMemPtr;
-                scalar_t weighting_factor_h_prev = div_g(
+                float weighting_factor_h_prev = div_g(
                     mul_g(exp_g(sub_g(m_prev_val, m_val)), n_prev_val), n_val);
 
                 float hTile_weighted_val =
