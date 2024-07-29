@@ -18,29 +18,29 @@ In this file:
 # the code below and commenting out the equivalent parameters is convenient for
 # re-tuning.
 configs = [
-    triton.Config({"BLOCK_M": BM, "BLOCK_N": BN}, num_stages=s, num_warps=w)
-    for BM in [64, 128]
-    for BN in [32, 64]
+    triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
+    for BQ in [64, 128]
+    for BKV in [32, 64]
     for s in [3, 4, 7]
     for w in [4, 8]
 ]
 
 
 def keep(conf):
-    BLOCK_M = conf.kwargs["BLOCK_M"]
-    BLOCK_N = conf.kwargs["BLOCK_N"]
+    BLOCK_M = conf.kwargs["BLOCK_Q"]
+    BLOCK_N = conf.kwargs["BLOCK_KV"]
     if BLOCK_M * BLOCK_N < 128 * 128 and conf.num_warps == 8:
         return False
     return True
 
 
-BLOCK_Q = 64
-BLOCK_KV = 32
+# BLOCK_Q = 64
+# BLOCK_KV = 32
 
 MINIMUM_MAX_VAL = -10  # -float("inf")  # -10.0
 
 
-# @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
+@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
 def _mlstm_fwd(
     matQ,
@@ -256,18 +256,18 @@ def mlstm_fw(
 
     matH = torch.empty_like(matQ)
 
-    # grid = lambda args: (
-    #     triton.cdiv(matQ.shape[2], args["BLOCK_Q"]),
-    #     matQ.shape[0] * matQ.shape[1],
-    #     1,
-    # )
-    # fix grid for debugging
     grid = lambda args: (
-        triton.cdiv(matQ.shape[2], BLOCK_Q),
+        triton.cdiv(matQ.shape[2], args["BLOCK_Q"]),
         matQ.shape[0] * matQ.shape[1],
         1,
     )
-    print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
+    # fix grid for debugging
+    # grid = lambda args: (
+    #     triton.cdiv(matQ.shape[2], BLOCK_Q),
+    #     matQ.shape[0] * matQ.shape[1],
+    #     1,
+    # )
+    # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
 
     vecN = torch.zeros(
         (matQ.shape[0], matQ.shape[1], matQ.shape[2]),
@@ -315,8 +315,8 @@ def mlstm_fw(
         H=NH,
         N_CTX=SL,
         HEAD_DIM=HEAD_DIM_K,
-        BLOCK_Q=BLOCK_Q,
-        BLOCK_KV=BLOCK_KV,
+        # BLOCK_Q=BLOCK_Q,
+        # BLOCK_KV=BLOCK_KV,
         MINIMUM_MAX_VAL=MINIMUM_MAX_VAL,
     )
 
