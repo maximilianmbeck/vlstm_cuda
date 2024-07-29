@@ -35,6 +35,48 @@ def construct_log_gate_matrix_tiled(
     return matLogD_tile
 
 
+def construct_log_gate_matrix_paper(
+    vecI: torch.Tensor, vecF: torch.Tensor
+) -> torch.Tensor:
+    _device = vecF.device
+    _dtype = vecF.dtype
+    B, NH, S, _ = vecF.shape
+    ltr = torch.tril(
+        torch.ones(
+            (S, S),
+            dtype=torch.bool,
+            device=_device,
+        )
+    )
+    log_fgates_cumsum = torch.cat(
+        [
+            torch.zeros((B, NH, 1, 1), dtype=_dtype, device=_device),
+            torch.cumsum(vecF, dim=-2),
+        ],
+        dim=-2,
+    )  # (B, NH, S+1, 1)
+    # for each batch/head this is a matrix of shape (S+1, S+1) containing the cumsum of the log forget gate values
+    # in the second dimension (colum dimension). Each row has the same is a copy of the first row.
+    # First entry of each row is zero.
+    rep_log_fgates_cumsum = log_fgates_cumsum.repeat(
+        1, 1, 1, S + 1
+    )  # (B, NH, S+1, S+1)
+    # Now in each row cut off / subtract the forgetgate values of the later timesteps
+    # where col j > row i
+    _log_fg_matrix = rep_log_fgates_cumsum - rep_log_fgates_cumsum.transpose(
+        -2, -1
+    )  # (B, NH, S+1, S+1)
+    # Causal masking & selection of the correct submatrix, such that forgetgate at timestep t is not applied
+    # to the input at timestep t
+    log_fg_matrix = torch.where(
+        ltr, _log_fg_matrix[:, :, 1:, 1:], -float("inf")
+    )  # (B, NH, S, S)
+
+    # gate decay matrix D (combination of forget gate and input gate)
+    log_D_matrix = log_fg_matrix + vecI.transpose(-2, -1)  # (B, NH, S, S)
+    return log_D_matrix
+
+
 def ceildiv(a: int, b: int) -> int:
     return (a + b - 1) // b
 
@@ -62,7 +104,8 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
 
     # ? preprocessing
     # precompute gate cumsums
-    vecF_cs = torch.cumsum(vecF, dim=-1)
+    vecF_act = F.logsigmoid(vecF)
+    vecF_cs = torch.cumsum(vecF_act, dim=-1)
 
     # ? tile the input tensors
     # we keep the batch and num_head dimensions
@@ -102,8 +145,6 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
         # init matDeltaK_tile, matDeltaV_tile to zero
         matDeltaK_tile = torch.zeros_like(matK_tile)
         matDeltaV_tile = torch.zeros_like(matV_tile)
-
-        # TODO init vecDeltaI_chunk and vecDeltaF_chunk to zero here ???
 
         vecF_cs_chunk_KV = vecF_cs[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV]
 
@@ -152,23 +193,23 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
             matP = matDeltaC * matDtilde
             matR = matS * matDtilde
 
-            matDeltaQ_tile = (matP @ matK_tile) / math.sqrt(DH)
-            # * store matDeltaQ in HBM (this access is in parallel, e.g. must be atomic)
+            matDeltaQ_tile = matP @ (matK_tile / math.sqrt(DH))
+            # * store matDeltaQ in HBM (this access is in parallel at the same HBM location, e.g. must be atomic)
             matDeltaQ[:, :, qIdx * BLOCK_Q : (qIdx + 1) * BLOCK_Q] += matDeltaQ_tile
 
             matDeltaK_tile += (matP.transpose(-2, -1) @ matQ_tile) / math.sqrt(DH)
 
-            matDeltaV_tile += (matR.transpose(-2, -1) @ matDeltaHtilde_tile) / (
-                vecN_chunk + eps
+            matDeltaV_tile += matR.transpose(-2, -1) @ (
+                matDeltaHtilde_tile / (vecN_chunk + eps)
             )
             #! end Q dim loop
 
-        # * store matDeltaK_tile & matDeltaV_tile in HBM
+        # * store matDeltaK_tile & matDeltaV_tile in HBM (every thread block writes to a different HBM location)
         matDeltaK[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = matDeltaK_tile
         matDeltaV[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = matDeltaV_tile
         #! end KV dim loop
 
-    return matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF
+    return matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF, matDtilde
 
 
 #! Reference for tiled version.
@@ -271,4 +312,4 @@ def vlstm_parallel_w_groupnorm_torch_bw(
 
     var_C = var_QK * var_D
     delta_V = var_C.transpose(-2, -1) @ (matDeltaHtilde / (vecN + eps))
-    return delta_Q, delta_K, delta_V, delta_i, delta_f
+    return delta_Q, delta_K, delta_V, delta_i, delta_f, var_D
