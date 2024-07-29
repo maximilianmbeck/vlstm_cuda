@@ -50,7 +50,7 @@ BLOCK_KV = 16
 MINIMUM_MAX_VAL = -10  # -float("inf")  # -10.0
 
 
-# @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
+@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
 def _mlstm_fwd(
     matQ,
@@ -251,8 +251,8 @@ def mlstm_fw(
     matV: torch.Tensor,
     vecI: torch.Tensor,
     vecF: torch.Tensor,
-    BLOCK_Q: int = BLOCK_Q,
-    BLOCK_KV: int = BLOCK_KV,
+    # BLOCK_Q: int = BLOCK_Q,
+    # BLOCK_KV: int = BLOCK_KV,
 ) -> torch.Tensor:
     # batch size, number of heads, sequence length, head dimension
     BS, NH, SL, DH = matQ.shape
@@ -268,18 +268,18 @@ def mlstm_fw(
 
     matH = torch.empty_like(matQ)
 
-    # grid = lambda args: (
-    #     triton.cdiv(matQ.shape[2], args["BLOCK_Q"]),
-    #     matQ.shape[0] * matQ.shape[1],
-    #     1,
-    # )
-    # fix grid for debugging
     grid = lambda args: (
-        triton.cdiv(matQ.shape[2], BLOCK_Q),
+        triton.cdiv(matQ.shape[2], args["BLOCK_Q"]),
         matQ.shape[0] * matQ.shape[1],
         1,
     )
-    print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
+    # fix grid for debugging
+    # grid = lambda args: (
+    #     triton.cdiv(matQ.shape[2], BLOCK_Q),
+    #     matQ.shape[0] * matQ.shape[1],
+    #     1,
+    # )
+    # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
 
     vecN = torch.zeros(
         (matQ.shape[0], matQ.shape[1], matQ.shape[2]),
@@ -327,8 +327,8 @@ def mlstm_fw(
         H=NH,
         N_CTX=SL,
         HEAD_DIM=HEAD_DIM_K,
-        BLOCK_Q=BLOCK_Q,
-        BLOCK_KV=BLOCK_KV,
+        # BLOCK_Q=BLOCK_Q,
+        # BLOCK_KV=BLOCK_KV,
         MINIMUM_MAX_VAL=MINIMUM_MAX_VAL,
     )
 

@@ -65,10 +65,15 @@ if __name__ == "__main__":
 # Current result on my RTX 4060 Laptop:
 
 # version 1:
+# Triton autotuning for function _mlstm_fwd finished after 2.19s; best config selected: BLOCK_Q: 32, BLOCK_KV: 32, num_warps: 4, num_ctas: 1, num_stages: 3, maxnreg: None;
+# Triton autotuning for function _mlstm_fwd finished after 2.19s; best config selected: BLOCK_Q: 32, BLOCK_KV: 32, num_warps: 4, num_ctas: 1, num_stages: 3, maxnreg: None;
+# Triton autotuning for function _mlstm_fwd finished after 2.33s; best config selected: BLOCK_Q: 32, BLOCK_KV: 32, num_warps: 4, num_ctas: 1, num_stages: 3, maxnreg: None;
+# Triton autotuning for function _mlstm_fwd finished after 2.63s; best config selected: BLOCK_Q: 128, BLOCK_KV: 16, num_warps: 4, num_ctas: 1, num_stages: 3, maxnreg: None;
+# Triton autotuning for function _mlstm_fwd finished after 3.27s; best config selected: BLOCK_Q: 128, BLOCK_KV: 16, num_warps: 4, num_ctas: 1, num_stages: 3, maxnreg: None;
 # fused-mlstm-batch2-head8-d128:
 #     N_CTX   mLSTM PT  mLSTM PT Compile  mLSTM Triton
-# 0   256.0   0.212689          0.107696      0.076507
-# 1   512.0   0.578324          0.324955      0.162917
-# 2  1024.0   3.295056          1.181538      0.488450
-# 3  2048.0  13.671323          4.535624      1.675041
-# 4  4096.0  54.495167         18.335104      5.996934
+# 0   256.0   0.210750          0.106337      0.068884
+# 1   512.0   0.614615          0.314931      0.130720
+# 2  1024.0   3.262906          1.166135      0.382063
+# 3  2048.0  13.399594          4.474444      1.232630
+# 4  4096.0  56.215553         18.193554      4.122192
