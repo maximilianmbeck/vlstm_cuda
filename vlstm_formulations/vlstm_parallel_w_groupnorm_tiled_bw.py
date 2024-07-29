@@ -4,6 +4,41 @@ import torch
 import torch.nn.functional as F
 
 
+def construct_log_gate_matrix_tiled(
+    vecI: torch.Tensor,
+    vecF: torch.Tensor,
+    BQ: int,
+    BKV: int,
+    idx_BQ: int,
+    idx_BKV: int,
+    vecF_cs: torch.Tensor = None,
+) -> torch.Tensor:
+    B, NH, S = vecF.shape
+    if vecF_cs is None:
+        vecF_cs = torch.cumsum(vecF, dim=-1)
+    vecF_cs_chunk_Q = vecF_cs[:, :, idx_BQ * BQ : (idx_BQ + 1) * BQ]
+    vecF_cs_chunk_KV = vecF_cs[:, :, idx_BKV * BKV : (idx_BKV + 1) * BKV]
+
+    vecF_cs_tile = vecF_cs_chunk_Q[:, :, :, None] - vecF_cs_chunk_KV[:, :, None, :]
+
+    vecI_chunk = vecI[:, :, idx_BKV * BKV : (idx_BKV + 1) * BKV]
+    matLogD_tile = vecF_cs_tile + vecI_chunk
+
+    # causal masking
+    if idx_BKV * BKV >= idx_BQ * BQ:
+        bq_idxes = torch.arange(idx_BQ * BQ, (idx_BQ + 1) * BQ, device=vecI.device)
+        kv_idxes = torch.arange(idx_BKV * BKV, (idx_BKV + 1) * BKV, device=vecI.device)
+        idx_mask = (
+            bq_idxes[:, None] - kv_idxes[None, :]
+        )  # or bq_idxes[:, None] >= kv_idxes[None, :]
+        matLogD_tile = torch.where(idx_mask < 0, -float("inf"), matLogD_tile)
+    return matLogD_tile
+
+
+def ceildiv(a: int, b: int) -> int:
+    return (a + b - 1) // b
+
+
 def mlstm_parallel_w_groupnorm_torch_tiled_bw(
     matDeltaHtilde: torch.Tensor,
     matQ: torch.Tensor,
@@ -13,9 +48,85 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
     vecF: torch.Tensor,
     vecM: torch.Tensor,
     vecN: torch.Tensor,
+    BLOCK_Q: int = 32,
+    BLOCK_KV: int = 32,
+    eps: float = 1e-6,
 ) -> tuple[torch.Tensor, ...]:
 
-    pass
+    B, NH, S, DH = matQ.shape
+    _dtype, _device = matQ.dtype, matQ.device
+    assert BLOCK_KV <= BLOCK_Q
+
+    assert vecF.shape == (B, NH, S)
+    assert vecI.shape == (B, NH, S)
+
+    # ? preprocessing
+    # precompute gate cumsums
+    vecF_cs = torch.cumsum(vecF, dim=-1)
+
+    # ? tile the input tensors
+    # we keep the batch and num_head dimensions
+    # in a kernel we would embarrassingly parallelize over these dimensions
+
+    # split along BLOCK_Q dimension:
+    matQ_tiles = torch.split(matQ, BLOCK_Q, dim=2)
+    matDeltaHtilde_tiles = torch.split(matDeltaHtilde, BLOCK_Q, dim=2)
+    vecM_chunks = torch.split(vecM, BLOCK_Q, dim=2)
+    vecN_chunks = torch.split(vecN, BLOCK_Q, dim=2)
+    vecF_cs_chunks = torch.split(vecF_cs, BLOCK_Q, dim=2)
+
+    # split along BLOCK_KV dimension:
+    matK_tiles = torch.split(matK, BLOCK_KV, dim=2)
+    matV_tiles = torch.split(matV, BLOCK_KV, dim=2)
+    vecI_chunks = torch.split(vecI, BLOCK_KV, dim=2)
+
+    # ? define the output tensors
+    matDeltaQ = torch.zeros_like(matQ)
+    matDeltaK = torch.zeros_like(matK)
+    matDeltaV = torch.zeros_like(matV)
+    vecDeltaI = torch.zeros_like(vecI)
+    vecDeltaF = torch.zeros_like(vecF)
+
+    # ? begin the backward pass
+
+    #! KV dim loop
+    # we will parallelize over this loop later
+    # we start at the leftmost block of the KV dimension and work our way right
+    for kvIdx, (matK_tile, matV_tile, vecI_chunk) in enumerate(
+        zip(matK_tiles, matV_tiles, vecI_chunks)
+    ):
+        # init matDeltaK_tile, matDeltaV_tile to zero
+        matDeltaK_tile = torch.zeros_like(matK_tile)
+        matDeltaV_tile = torch.zeros_like(matV_tile)
+
+        # TODO init vecDeltaI_chunk and vecDeltaF_chunk to zero here ???
+
+        vecF_cs_chunk_KV = vecF_cs[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV]
+
+        #! Q dim loop
+        # we start at the diagonal of the S & D matrices and work our way down
+        qStartIdx = (kvIdx * BLOCK_KV) // BLOCK_Q
+        qEndIdx = ceildiv(S, BLOCK_Q)
+        for qIdx in range(qStartIdx, qEndIdx):
+            matQ_tile = matQ_tiles[qIdx]
+            matDeltaHtilde_tile = matDeltaHtilde_tiles[qIdx]
+            vecM_chunk = vecM_chunks[qIdx]
+            vecN_chunk = vecN_chunks[qIdx]
+            vecF_cs_chunk_Q = vecF_cs_chunks[qIdx]
+
+            matDeltaC = (
+                matDeltaHtilde_tile @ matV_tile.transpose(-2, -1) / (vecN_chunk + eps)
+            )
+
+            # ? recomputation of S & D matrices
+            matS = (matQ_tile @ matK_tile.transpose(-2, -1)) / math.sqrt(DH)
+
+            # construct D matrix
+            vecF_cs_tile = (
+                vecF_cs_chunk_Q[:, :, :, None] - vecF_cs_chunk_KV[:, :, None, :]
+            )
+            matLogD_tile = vecF_cs_tile + vecI_chunk
+            matD = torch.exp(matLogD_tile - vecM_chunk)
 
 
 #! Reference for tiled version.

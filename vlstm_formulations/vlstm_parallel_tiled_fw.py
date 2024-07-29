@@ -59,7 +59,7 @@ def construct_log_gate_matrix_tiled(
     BQ: int,
     BKV: int,
     idx_BQ: int,
-    idx_BKV,
+    idx_BKV: int,
     fgs_cs: torch.Tensor = None,
 ) -> torch.Tensor:
     B, NH, S = fgs.shape
