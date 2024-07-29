@@ -87,6 +87,10 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
     vecDeltaI = torch.zeros_like(vecI)
     vecDeltaF = torch.zeros_like(vecF)
 
+    print(
+        f"matQ_tiles: {len(matQ_tiles)}, {matQ_tiles[0].shape} | matK_tiles: {len(matK_tiles)}, {matK_tiles[0].shape}"
+    )
+
     # ? begin the backward pass
 
     #! KV dim loop
@@ -126,7 +130,45 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
                 vecF_cs_chunk_Q[:, :, :, None] - vecF_cs_chunk_KV[:, :, None, :]
             )
             matLogD_tile = vecF_cs_tile + vecI_chunk
-            matD = torch.exp(matLogD_tile - vecM_chunk)
+            # causal masking of matLogD_tile
+            if kvIdx * BLOCK_KV >= qIdx * BLOCK_Q:
+                bq_idxes = torch.arange(
+                    qIdx * BLOCK_Q, (qIdx + 1) * BLOCK_Q, device=vecI.device
+                )
+                kv_idxes = torch.arange(
+                    kvIdx * BLOCK_KV, (kvIdx + 1) * BLOCK_KV, device=vecI.device
+                )
+                idx_mask = bq_idxes[:, None] - kv_idxes[None, :]
+                matLogD_tile = torch.where(idx_mask < 0, -float("inf"), matLogD_tile)
+
+            matDtilde = torch.exp(matLogD_tile - vecM_chunk)
+            # ? end recomputation of S & D matrices
+
+            matDeltaCtilde = matDeltaC * matS * matDtilde
+
+            # ? compute sums for vecDeltaF and vecDeltaI
+            # TODO
+
+            matP = matDeltaC * matDtilde
+            matR = matS * matDtilde
+
+            matDeltaQ_tile = (matP @ matK_tile) / math.sqrt(DH)
+            # * store matDeltaQ in HBM (this access is in parallel, e.g. must be atomic)
+            matDeltaQ[:, :, qIdx * BLOCK_Q : (qIdx + 1) * BLOCK_Q] += matDeltaQ_tile
+
+            matDeltaK_tile += (matP.transpose(-2, -1) @ matQ_tile) / math.sqrt(DH)
+
+            matDeltaV_tile += (matR.transpose(-2, -1) @ matDeltaHtilde_tile) / (
+                vecN_chunk + eps
+            )
+            #! end Q dim loop
+
+        # * store matDeltaK_tile & matDeltaV_tile in HBM
+        matDeltaK[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = matDeltaK_tile
+        matDeltaV[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = matDeltaV_tile
+        #! end KV dim loop
+
+    return matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF
 
 
 #! Reference for tiled version.
