@@ -63,6 +63,8 @@ if __name__ == "__main__":
 
 
 # Current result on my RTX 4060 Laptop:
+
+# version 1:
 # fused-mlstm-batch2-head8-d128:
 #     N_CTX   mLSTM PT  mLSTM PT Compile  mLSTM Triton
 # 0   256.0   0.212689          0.107696      0.076507

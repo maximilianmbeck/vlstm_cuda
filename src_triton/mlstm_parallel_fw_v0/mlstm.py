@@ -201,7 +201,7 @@ def _mlstm_fwd(
         matC = matS * matD_tilde
 
         # ? -- compute l_state --
-        # TODO use tl.fma here
+        # tl.fma did not bring performance improvement
         l_temp = m_ratio * l_old
         l_new = l_temp + tl.sum(matC, axis=1)
 
@@ -210,7 +210,7 @@ def _mlstm_fwd(
 
         # ? -- compute h_out -- update h_out --
         # compute weighting factor
-        # TODO use tl.fdiv here
+        # tl.fdiv did not bring any performance improvement
         h_out_old_weight = (m_ratio * n_old) / n_new
         h_out = h_out * h_out_old_weight[:, None]
 
