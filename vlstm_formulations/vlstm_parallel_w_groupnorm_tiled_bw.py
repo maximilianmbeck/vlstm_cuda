@@ -102,11 +102,13 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
     assert vecF.shape == (B, NH, S)
     assert vecI.shape == (B, NH, S)
 
-    # ? preprocessing
+    ## ? preprocessing
     # precompute gate cumsums
     vecF_act = F.logsigmoid(vecF)
     vecF_cs = torch.cumsum(vecF_act, dim=-1)
+    ## ? end preprocessing
 
+    ## ? setup
     # ? tile the input tensors
     # we keep the batch and num_head dimensions
     # in a kernel we would embarrassingly parallelize over these dimensions
@@ -123,19 +125,20 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
     matV_tiles = torch.split(matV, BLOCK_KV, dim=2)
     vecI_chunks = torch.split(vecI, BLOCK_KV, dim=2)
 
-    # ? define the output tensors
+    # ? define the kernel output tensors
     matDeltaQ = torch.zeros_like(matQ)
     matDeltaK = torch.zeros_like(matK)
     matDeltaV = torch.zeros_like(matV)
     vecDeltaI = torch.zeros_like(vecI)
+    vecDeltaF_cs_sum = torch.zeros_like(vecF_cs)
     vecDeltaF = torch.zeros_like(vecF)
 
     print(
         f"matQ_tiles: {len(matQ_tiles)}, {matQ_tiles[0].shape} | matK_tiles: {len(matK_tiles)}, {matK_tiles[0].shape}"
     )
+    ## ? end setup
 
-    # ? begin the backward pass
-
+    ## ? begin the backward pass kernel
     #! KV dim loop
     # we will parallelize over this loop later
     # we start at the leftmost block of the KV dimension and work our way right
@@ -145,6 +148,10 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
         # init matDeltaK_tile, matDeltaV_tile to zero
         matDeltaK_tile = torch.zeros_like(matK_tile)
         matDeltaV_tile = torch.zeros_like(matV_tile)
+
+        # init vecDeltaF_cs_chunk_KV, vecDeltaI_chunk_KV
+        vecDeltaI_sum_chunk_KV = torch.zeros_like(vecI_chunk)
+        vecDeltaF_cs_sum_chunk_KV = torch.zeros_like(vecI_chunk)
 
         vecF_cs_chunk_KV = vecF_cs[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV]
 
@@ -171,6 +178,7 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
                 vecF_cs_chunk_Q[:, :, :, None] - vecF_cs_chunk_KV[:, :, None, :]
             )
             matLogD_tile = vecF_cs_tile + vecI_chunk
+
             # causal masking of matLogD_tile
             if kvIdx * BLOCK_KV >= qIdx * BLOCK_Q:
                 bq_idxes = torch.arange(
@@ -187,8 +195,28 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
 
             matDeltaCtilde = matDeltaC * matS * matDtilde
 
-            # ? compute sums for vecDeltaF and vecDeltaI
-            # TODO
+            # ? compute sum for vecDeltaF and vecDeltaI
+            vecDeltaI_sum_chunk_KV += matDeltaCtilde.sum(dim=-2)
+
+            matDeltaCtilde_cumsum = matDeltaCtilde.cumsum(-1)
+            # causal masking of matDeltaCtilde_cumsum
+            if kvIdx * BLOCK_KV >= qIdx * BLOCK_Q:
+                bq_idxes = torch.arange(
+                    qIdx * BLOCK_Q, (qIdx + 1) * BLOCK_Q, device=vecI.device
+                )
+                kv_idxes = (
+                    torch.arange(
+                        kvIdx * BLOCK_KV, (kvIdx + 1) * BLOCK_KV, device=vecI.device
+                    )
+                    + 1.0
+                )
+                idx_mask = bq_idxes[:, None] - kv_idxes[None, :]
+
+                matDeltaCtilde_cumsum = torch.where(
+                    idx_mask < 0, 0.0, matDeltaCtilde_cumsum
+                )
+
+            vecDeltaF_cs_sum_chunk_KV += matDeltaCtilde_cumsum.sum(dim=-2)
 
             matP = matDeltaC * matDtilde
             matR = matS * matDtilde
@@ -207,9 +235,28 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
         # * store matDeltaK_tile & matDeltaV_tile in HBM (every thread block writes to a different HBM location)
         matDeltaK[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = matDeltaK_tile
         matDeltaV[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = matDeltaV_tile
+
+        # * store vecDeltaIF_sum_chunk_KV in HBM (every thread block writes to a different HBM location)
+        vecDeltaI[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = (
+            vecDeltaI_sum_chunk_KV
+        )
+        # * store vecDeltaF_cs_sum_chunk_KV in HBM (every thread block writes to a different HBM location)
+        # this is not the final result yet, needs postprocessing to accumulate the sums of left threadblocks
+        vecDeltaF_cs_sum[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = (
+            vecDeltaF_cs_sum_chunk_KV
+        )
         #! end KV dim loop
 
-    return matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF, matDtilde
+    ## ? end the backward pass kernel
+
+    ## ? postprocessing
+    vecDeltaF[:, :, 1:] = vecDeltaF_cs_sum[:, :, :-1] * torch.sigmoid(-vecF[:, :, 1:])
+
+    # TODO accumulate the sums of left threadblocks
+
+    ## ? end postprocessing
+
+    return matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF, matDeltaCtilde
 
 
 #! Reference for tiled version.
@@ -299,6 +346,8 @@ def vlstm_parallel_w_groupnorm_torch_bw(
             delta_fbar[:, :, k, 0] += (
                 masked_deltaDtilde[:, :, k:, j].view(B, NH, -1).sum(dim=-1)
             )
+    # more efficient way would be
+    # delta_fbar = delta_Dtilde.cumsum(-1).tril(-1).sum(dim=-2)
 
     delta_f = delta_fbar * torch.sigmoid(-vecF)
 
@@ -312,4 +361,4 @@ def vlstm_parallel_w_groupnorm_torch_bw(
 
     var_C = var_QK * var_D
     delta_V = var_C.transpose(-2, -1) @ (matDeltaHtilde / (vecN + eps))
-    return delta_Q, delta_K, delta_V, delta_i, delta_f, var_D
+    return delta_Q, delta_K, delta_V, delta_i, delta_f, delta_Dtilde
