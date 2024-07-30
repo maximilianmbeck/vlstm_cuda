@@ -196,23 +196,23 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
             # ? compute sum for vecDeltaF and vecDeltaI
             vecDeltaI_sum_chunk_KV += matDeltaCtilde.sum(dim=-2)
 
-            matDeltaCtilde_cumsum = matDeltaCtilde.cumsum(-1)
-            # causal masking of matDeltaCtilde_cumsum
-            if kvIdx * BLOCK_KV >= qIdx * BLOCK_Q:
-                bq_idxes = torch.arange(
-                    qIdx * BLOCK_Q, (qIdx + 1) * BLOCK_Q, device=vecI.device
-                )
-                kv_idxes = (
-                    torch.arange(
-                        kvIdx * BLOCK_KV, (kvIdx + 1) * BLOCK_KV, device=vecI.device
-                    )
-                    + 1.0  #! we need to add 1 here to get the correct mask (e.g. .tril(-1))
-                )
-                idx_mask = bq_idxes[:, None] - kv_idxes[None, :]
+            # matDeltaCtilde_cumsum = matDeltaCtilde.cumsum(-1)
+            # # causal masking of matDeltaCtilde_cumsum
+            # if kvIdx * BLOCK_KV >= qIdx * BLOCK_Q:
+            #     bq_idxes = torch.arange(
+            #         qIdx * BLOCK_Q, (qIdx + 1) * BLOCK_Q, device=vecI.device
+            #     )
+            #     kv_idxes = (
+            #         torch.arange(
+            #             kvIdx * BLOCK_KV, (kvIdx + 1) * BLOCK_KV, device=vecI.device
+            #         )
+            #         + 1.0  #! we need to add 1 here to get the correct mask (e.g. .tril(-1))
+            #     )
+            #     idx_mask = bq_idxes[:, None] - kv_idxes[None, :]
 
-                matDeltaCtilde_cumsum = torch.where(
-                    idx_mask < 0, 0.0, matDeltaCtilde_cumsum
-                )
+            #     matDeltaCtilde_cumsum = torch.where(
+            #         idx_mask < 0, 0.0, matDeltaCtilde_cumsum
+            #     )
 
             matP = matDeltaC * matDtilde
             matR = matS * matDtilde
