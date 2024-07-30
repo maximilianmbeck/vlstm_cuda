@@ -130,7 +130,6 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
     matDeltaK = torch.zeros_like(matK)
     matDeltaV = torch.zeros_like(matV)
     vecDeltaI = torch.zeros_like(vecI)
-    vecDeltaF_cs_sum = torch.zeros_like(vecF_cs)
     vecDeltaF = torch.zeros_like(vecF)
 
     print(
@@ -151,7 +150,6 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
 
         # init vecDeltaF_cs_chunk_KV, vecDeltaI_chunk_KV
         vecDeltaI_sum_chunk_KV = torch.zeros_like(vecI_chunk)
-        vecDeltaF_cs_sum_chunk_KV = torch.zeros_like(vecI_chunk)
 
         vecF_cs_chunk_KV = vecF_cs[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV]
 
@@ -216,8 +214,6 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
                     idx_mask < 0, 0.0, matDeltaCtilde_cumsum
                 )
 
-            vecDeltaF_cs_sum_chunk_KV += matDeltaCtilde_cumsum.sum(dim=-2)
-
             matP = matDeltaC * matDtilde
             matR = matS * matDtilde
 
@@ -239,11 +235,6 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
         # * store vecDeltaIF_sum_chunk_KV in HBM (every thread block writes to a different HBM location)
         vecDeltaI[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = (
             vecDeltaI_sum_chunk_KV
-        )
-        # * store vecDeltaF_cs_sum_chunk_KV in HBM (every thread block writes to a different HBM location)
-        # this is not the final result yet, needs postprocessing to accumulate the sums of left threadblocks
-        vecDeltaF_cs_sum[:, :, kvIdx * BLOCK_KV : (kvIdx + 1) * BLOCK_KV] = (
-            vecDeltaF_cs_sum_chunk_KV
         )
         #! end KV dim loop
 
