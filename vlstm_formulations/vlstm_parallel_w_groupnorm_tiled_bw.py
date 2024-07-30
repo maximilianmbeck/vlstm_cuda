@@ -208,7 +208,7 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
                     torch.arange(
                         kvIdx * BLOCK_KV, (kvIdx + 1) * BLOCK_KV, device=vecI.device
                     )
-                    + 1.0
+                    + 1.0  #! we need to add 1 here to get the correct mask (e.g. .tril(-1))
                 )
                 idx_mask = bq_idxes[:, None] - kv_idxes[None, :]
 
@@ -250,10 +250,10 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
     ## ? end the backward pass kernel
 
     ## ? postprocessing
-    vecDeltaF[:, :, 1:] = vecDeltaF_cs_sum[:, :, :-1] * torch.sigmoid(-vecF[:, :, 1:])
-
-    # TODO accumulate the sums of left threadblocks
-
+    # compute the vecDeltaFbar values with dfbar = rev_cumsum((q*dq - k*dk).sum(-1))
+    vecDeltaFbar_acc = (matQ * matDeltaQ - matK * matDeltaK).sum(-1)
+    vecDeltaFbar = vecDeltaFbar_acc.flip(-1).cumsum(-1).flip(-1)
+    vecDeltaF = vecDeltaFbar * torch.sigmoid(-vecF)
     ## ? end postprocessing
 
     return matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF, matDeltaCtilde
@@ -350,6 +350,8 @@ def vlstm_parallel_w_groupnorm_torch_bw(
     # delta_fbar = delta_Dtilde.cumsum(-1).tril(-1).sum(dim=-2)
 
     delta_f = delta_fbar * torch.sigmoid(-vecF)
+    #! DEBUG only
+    # delta_f = delta_fbar
 
     # delta_i: input gate preactivation delta errors
     delta_i = torch.sum(delta_Dtilde, dim=-2).unsqueeze_(-1)
