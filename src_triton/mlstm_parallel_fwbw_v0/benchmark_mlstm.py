@@ -1,7 +1,8 @@
 import torch
 import triton
-from mlstm import mlstm_fw
 from torch_impl import vlstm_fw_torch_ref
+
+from src_triton.mlstm_parallel_fwbw_v0.mlstm_fw import mlstm_fw
 
 BATCH, N_HEADS, HEAD_DIM = 2, 8, 128
 # vary seq length for fixed head and batch=4

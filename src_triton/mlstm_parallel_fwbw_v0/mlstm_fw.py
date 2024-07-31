@@ -88,6 +88,7 @@ def _mlstm_fwd(
     BLOCK_Q: tl.constexpr,  #
     BLOCK_KV: tl.constexpr,  #
     MINIMUM_MAX_VAL: tl.constexpr,
+    EPS: tl.constexpr = 1e-6,
 ):
     tl.static_assert(BLOCK_KV <= HEAD_DIM)
     start_m_idx = tl.program_id(0)
@@ -221,12 +222,12 @@ def _mlstm_fwd(
         # ? -- compute h_out -- update h_out --
         # compute weighting factor
         # tl.fdiv did not bring any performance improvement
-        h_out_old_weight = (m_ratio * n_old) / n_new
+        h_out_old_weight = (m_ratio * n_old) / (n_new + EPS)
         h_out = h_out * h_out_old_weight[:, None]
 
         v = tl.load(V_block_ptr)
 
-        matC = matC / n_new[:, None]
+        matC = matC / (n_new[:, None] + EPS)
         matC = matC.to(tl.float16)
         h_out = tl.dot(matC, v, h_out)
 
