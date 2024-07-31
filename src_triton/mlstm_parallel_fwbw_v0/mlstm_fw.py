@@ -267,8 +267,6 @@ def mlstm_fw(
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
     # assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
-    matH = torch.empty_like(matQ)
-
     grid = lambda args: (
         triton.cdiv(matQ.shape[2], args["BLOCK_Q"]),
         matQ.shape[0] * matQ.shape[1],
@@ -281,6 +279,9 @@ def mlstm_fw(
     #     1,
     # )
     # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
+
+    # TODO unify dtypes
+    matH = torch.empty_like(matQ)
 
     vecN = torch.zeros(
         (matQ.shape[0], matQ.shape[1], matQ.shape[2]),
