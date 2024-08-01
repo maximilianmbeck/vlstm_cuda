@@ -169,34 +169,41 @@ def _mlstm_bwd(
     )
 
     # ? LOADING AND INITIALIZATION
-    # load matK_tile, matV_tile (will stay in SRAM throughout)
-    # TODO
+    # define kv_block_idxes for causal masking
+    kv_offset = kvIdx * BLOCK_KV
+    kv_block_idxes = kv_offset + tl.arange(0, BLOCK_Q)
+
+    # load matK_tile, matV_tile
+    matK_tile = tl.load(matK_block_ptr)
+    matV_tile = tl.load(matV_block_ptr)
     # init matDeltaK_tile, matDeltaV_tile accumulators
-    # TODO
+    matDeltaK_tile = tl.zeros([BLOCK_KV, HEAD_DIM], dtype=tl.float32)
+    matDeltaV_tile = tl.zeros([BLOCK_KV, HEAD_DIM], dtype=tl.float32)
+
     # load vecI_chunk
-    # TODO
+    vecI_chunk_KV_ptr = (
+        vecI + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
+    )
+    vecI_chunk_KV = tl.load(vecI_chunk_KV_ptr)
+
     # init vecDeltaI_sum accumulator
-    # TODO
+    vecDeltaI_sum_chunk_KV = tl.zeros([BLOCK_KV], dtype=tl.float32)
+
     # load vecF_cs_chunk_KV
-    # ifmn_offset defines the proper batch-head, q_offset defines the location
-    # in the sequence for the current thread block
     vecF_cs_chunk_KV_ptr = (
         vecF_cs + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
     )
     vecF_cs_chunk_KV = tl.load(vecF_cs_chunk_KV_ptr)
     vecF_cs_chunk_KV = vecF_cs_chunk_KV.to(tl.float32)
 
-    # define kv_block_idxes for causal masking
-    kv_offset = kvIdx * BLOCK_KV
-    kv_block_idxes = kv_offset + tl.arange(0, BLOCK_Q)
-
     # ? MAIN LOOP
     qStartIdx = (kvIdx * BLOCK_KV) // BLOCK_Q
     qEndIdx = tl.cdiv(N_CTX, BLOCK_Q)
     qEndIdx = tl.multiple_of(qEndIdx, BLOCK_Q)
 
-    matQ_block_ptr = ...  # TODO: tl.advance(matQ_block_ptr, (0, lo))
-    matDeltaQ_block_ptr = ...  # TODO: tl.advance(matV_block_ptr, (lo, 0))
+    # move (matDelta)Q_block_ptr to the position for the current thread block
+    matQ_block_ptr = tl.advance(matQ_block_ptr, (qStartIdx * BLOCK_Q, 0))
+    matDeltaQ_block_ptr = tl.advance(matDeltaQ_block_ptr, (qStartIdx * BLOCK_Q, 0))
 
     # loop over BLOCK_Q dimension and update matDeltK, matDeltaV, vecDeltaI_sum accumulators
     # update matDeltaQ synchronously across all thread blocks (atomic add in HBM)
