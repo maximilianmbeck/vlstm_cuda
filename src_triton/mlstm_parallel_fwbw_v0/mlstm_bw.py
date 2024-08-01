@@ -147,13 +147,17 @@ def _mlstm_bwd(
         block_shape=(BLOCK_KV, HEAD_DIM),
         order=(1, 0),
     )
+    # directly transpose matV while loading
     matV_block_ptr = tl.make_block_ptr(
         base=matV + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
-        strides=(stride_vs, stride_vd),
-        offsets=(kvIdx * BLOCK_KV, 0),
-        block_shape=(BLOCK_KV, HEAD_DIM),
-        order=(1, 0),
+        strides=(stride_vd, stride_vs),
+        offsets=(0, kvIdx * BLOCK_KV),
+        block_shape=(HEAD_DIM, BLOCK_KV),  # this is the transposed shape in SRAM
+        order=(
+            0,
+            1,
+        ),  # adapt the order to the underlying layout (which is not transposed), we load HEAD_DIM first
     )
 
     # output block pointers
@@ -169,21 +173,17 @@ def _mlstm_bwd(
         base=matDeltaK + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_dhts, stride_dhtd),
-        offsets=(0, 0),
+        offsets=(kvIdx * BLOCK_KV, 0),
         block_shape=(BLOCK_KV, HEAD_DIM),
         order=(1, 0),
     )
-    # directly transpose matDeltaV while loading
     matDeltaV_block_ptr = tl.make_block_ptr(
         base=matDeltaV + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_dhts, stride_dhtd),
-        offsets=(0, 0),
-        block_shape=(HEAD_DIM, BLOCK_KV),  # this is the transposed shape in SRAM
-        order=(
-            0,
-            1,
-        ),  # adapt the order to the underlying layout (which is not transposed), we load HEAD_DIM first
+        offsets=(kvIdx * BLOCK_KV, 0),
+        block_shape=(BLOCK_KV, HEAD_DIM),
+        order=(1, 0),
     )
 
     # ? LOADING AND INITIALIZATION
@@ -255,13 +255,16 @@ def _mlstm_bwd(
         vecF_cs_chunk_Q = vecF_cs_chunk_Q.to(tl.float32)
 
         # compute matDeltaC_tile
+        # tl.static_print("matDeltaHtilde_tile", matDeltaHtilde_tile)
+        # tl.static_print("matV_tile", matV_tile)
         matDeltaC_tile = tl.dot(matDeltaHtilde_tile, matV_tile)  # (BLOCK_Q, BLOCK_KV)
         matDeltaC_tile = matDeltaC_tile / (vecN_chunk_Q[:, None] + EPS)
 
         # ? recomputation of S & D matrices
         # compute matS_tile
-        matK_tile_transposed = tl.trans(matK_tile, (1, 0))  # (HEAD_DIM, BLOCK_KV)
-        matS_tile = torch.dot(matQ_tile, matK_tile_transposed)  # (BLOCK_Q, BLOCK_KV)
+        # tl.static_print("matK_tile", matK_tile)
+        matK_tile_transposed = tl.trans(matK_tile)  # (HEAD_DIM, BLOCK_KV)
+        matS_tile = tl.dot(matQ_tile, matK_tile_transposed)  # (BLOCK_Q, BLOCK_KV)
         matS_tile = matS_tile / qk_scale
 
         # compute matLogD_tile
@@ -293,18 +296,20 @@ def _mlstm_bwd(
         matR_tile = matS_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
 
         # update matDeltaQ_tile in HBM
+        matP_tile = matP_tile.to(tl.float16)
         matDeltaQ_tile = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
         matDeltaQ_tile = matDeltaQ_tile / qk_scale
-        tl.atomic_add(matDeltaQ_block_ptr, matDeltaQ_tile)
+        matDeltaQ_tile = matDeltaQ_tile.to(tl.float16)
+        # tl.atomic_add(matDeltaQ_block_ptr, matDeltaQ_tile)
 
         # update matDeltaK_tile, matDeltaV_tile in SRAM
-        matP_tile_transposed = tl.trans(matP_tile, (1, 0))  # (BLOCK_KV, BLOCK_Q)
+        matP_tile_transposed = tl.trans(matP_tile)  # (BLOCK_KV, BLOCK_Q)
         matDeltaK_tile_temp = tl.dot(
             matP_tile_transposed, matQ_tile
         )  # (BLOCK_KV, HEAD_DIM)
         matDeltaK_tile += matDeltaK_tile_temp / qk_scale
 
-        matR_tile_transposed = tl.trans(matR_tile, (1, 0))  # (BLOCK_KV, BLOCK_Q)
+        matR_tile_transposed = tl.trans(matR_tile)  # (BLOCK_KV, BLOCK_Q)
         matDeltaHtilde_tile_normalized = matDeltaHtilde_tile / (
             vecN_chunk_Q[:, None] + EPS
         )  # (BLOCK_Q, HEAD_DIM)
@@ -398,6 +403,10 @@ def mlstm_bw(
         matDeltaK=matDeltaK,
         matDeltaV=matDeltaV,
         vecDeltaI=vecDeltaI,
+        stride_dhtz=matDeltaHtilde.stride(0),
+        stride_dhth=matDeltaHtilde.stride(1),
+        stride_dhts=matDeltaHtilde.stride(2),
+        stride_dhtd=matDeltaHtilde.stride(3),
         stride_qz=matQ.stride(0),
         stride_qh=matQ.stride(1),
         stride_qs=matQ.stride(2),

@@ -308,23 +308,23 @@ def vlstm_parallel_fw_torch_w_groupnorm(
     return hiddens, normalizer, max_log_D
 
 
-def vlstm_parallel_bw_torch_w_groupnorm(
-    delta_Htilde: torch.Tensor,
-    queries: torch.Tensor,
-    keys: torch.Tensor,
-    values: torch.Tensor,
-    igate_preact: torch.Tensor,
-    fgate_preact: torch.Tensor,
-    var_n: torch.Tensor,
-    var_m: torch.Tensor,
+def vlstm_parallel_w_groupnorm_torch_bw(
+    matDeltaHtilde: torch.Tensor,
+    matQ: torch.Tensor,
+    matK: torch.Tensor,
+    matV: torch.Tensor,
+    vecI: torch.Tensor,
+    vecF: torch.Tensor,
+    vecM: torch.Tensor,
+    vecN: torch.Tensor,
     eps: float = 1e-6,
 ) -> tuple[torch.Tensor, ...]:
-    B, NH, S, DH = queries.shape
-    _dtype, _device = queries.dtype, queries.device
+    B, NH, S, DH = matQ.shape
+    _dtype, _device = matQ.dtype, matQ.device
 
     # compute var_D
     # forget gate matrix
-    log_fgates = F.logsigmoid(fgate_preact)  # (B, NH, S, 1)
+    log_fgates = F.logsigmoid(vecF)  # (B, NH, S, 1)
     ltr = torch.tril(
         torch.ones(
             (S, S),
@@ -356,14 +356,14 @@ def vlstm_parallel_bw_torch_w_groupnorm(
         ltr, _log_fg_matrix[:, :, 1:, 1:], -float("inf")
     )  # (B, NH, S, S)
     ltr_ig = torch.where(ltr, 0.0, -float("inf"))
-    ig_matrix = igate_preact.transpose(-2, -1) + ltr_ig  # (B, NH, S, S)
+    ig_matrix = vecI.transpose(-2, -1) + ltr_ig  # (B, NH, S, S)
     var_Dtilde = log_fg_matrix + ig_matrix
-    var_D = torch.exp(var_Dtilde - var_m)
+    var_D = torch.exp(var_Dtilde - vecM).to(dtype=_dtype)
 
     # intermediate delta-errors
-    delta_C = delta_Htilde @ values.transpose(-2, -1) / (var_n + eps)
+    delta_C = matDeltaHtilde @ matV.transpose(-2, -1) / (vecN + eps)
 
-    var_QK = queries @ (keys / math.sqrt(DH)).transpose(-2, -1)
+    var_QK = matQ @ (matK / math.sqrt(DH)).transpose(-2, -1)
 
     delta_D = delta_C * var_QK
 
@@ -393,32 +393,24 @@ def vlstm_parallel_bw_torch_w_groupnorm(
             delta_fbar[:, :, k, 0] += (
                 masked_deltaDtilde[:, :, k:, j].view(B, NH, -1).sum(dim=-1)
             )
+    # more efficient way would be
+    # delta_fbar = delta_Dtilde.cumsum(-1).tril(-1).sum(dim=-2)
 
-    delta_f = (delta_fbar * torch.sigmoid(-fgate_preact)).to(dtype=_dtype)
+    delta_f = delta_fbar * torch.sigmoid(-vecF)
+    #! DEBUG only
+    # delta_f = delta_fbar
 
     # delta_i: input gate preactivation delta errors
-    delta_i = torch.sum(delta_Dtilde, dim=-2).unsqueeze_(-1).to(dtype=_dtype)
+    delta_i = torch.sum(delta_Dtilde, dim=-2).unsqueeze_(-1)
 
     # output delta-errors / gradients
-    mat_P = (delta_C * var_D).to(dtype=_dtype)
-    delta_Q = mat_P @ (keys / math.sqrt(DH))
-    delta_K = mat_P.transpose(-2, -1) @ (queries / math.sqrt(DH))
 
-    var_R = (var_QK * var_D).to(dtype=_dtype)
-    delta_V = var_R.transpose(-2, -1) @ (delta_Htilde / (var_n + eps))
-    return (
-        delta_Q,
-        delta_K,
-        delta_V,
-        delta_i,
-        delta_f,
-        delta_C,
-        delta_D,
-        delta_Dtilde,
-        delta_fbar,
-        mat_P,
-        var_R,
-    )
+    delta_Q = (delta_C * var_D) @ (matK / math.sqrt(DH))
+    delta_K = (delta_C * var_D).transpose(-2, -1) @ (matQ / math.sqrt(DH))
+
+    var_C = var_QK * var_D
+    delta_V = var_C.transpose(-2, -1) @ (matDeltaHtilde / (vecN + eps))
+    return delta_Q, delta_K, delta_V, delta_i, delta_f  # , delta_Dtilde
 
 
 def vlstm_parallel_fwbw_torch_w_groupnorm(
