@@ -299,8 +299,12 @@ def _mlstm_bwd(
         matP_tile = matP_tile.to(tl.float16)
         matDeltaQ_tile = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
         matDeltaQ_tile = matDeltaQ_tile / qk_scale
-        matDeltaQ_tile = matDeltaQ_tile.to(tl.float16)
+        matDeltaQ_tile = matDeltaQ_tile.to(matDeltaQ_block_ptr.type.element_ty)
+        # This gives: RuntimeError: PassManager::run failed
         # tl.atomic_add(matDeltaQ_block_ptr, matDeltaQ_tile)
+        matDeltaQ_global = tl.load(matDeltaQ_block_ptr, eviction_policy="evict_last")
+        matDeltaQ_global += matDeltaQ_tile
+        tl.store(matDeltaQ_block_ptr, matDeltaQ_global, eviction_policy="evict_last")
 
         # update matDeltaK_tile, matDeltaV_tile in SRAM
         matP_tile_transposed = tl.trans(matP_tile)  # (BLOCK_KV, BLOCK_Q)
