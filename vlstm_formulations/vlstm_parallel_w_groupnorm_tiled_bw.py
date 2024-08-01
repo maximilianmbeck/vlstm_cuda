@@ -193,7 +193,7 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
 
             matDeltaCtilde = matDeltaC * matS * matDprime
 
-            # ? compute sum for vecDeltaF and vecDeltaI
+            # ? compute sum for vecDeltaI
             vecDeltaI_sum_chunk_KV += matDeltaCtilde.sum(dim=-2)
 
             # matDeltaCtilde_cumsum = matDeltaCtilde.cumsum(-1)

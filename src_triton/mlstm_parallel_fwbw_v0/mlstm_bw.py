@@ -7,6 +7,20 @@ import triton.language as tl
 """
 In this file:
 - parallel backward pass of the mlstm
+
+Note: 
+- There is a difference in the way the deltaQ gradient is computed in the backward pass for 
+  the triton implementation of the official triton tutorial implementation and the triton implementation 
+  in the flash attention repo.
+- The difference is:
+    - triton tutorial impl: There are two loops (functions). 
+      The first implements the dk and dv gradients. The second implements the dq gradient. 
+      Advantage: we do not have a race condition on the dq gradient in global memory (CUDA impl solves this with atomic add.)
+      Disadvantage: we basically compute the Attention matrix twice.
+    - flash attention impl: There is only one loop and the dq gradient is computed in the same loop as the dk and dv gradients.
+      Advantage: we compute the Attention matrix only once.
+      Disadvantage: there might be a race condition on the dq gradient in global memory as all threadblocks need to update the same dq gradient
+                    memory space.
 """
 
 
@@ -159,23 +173,28 @@ def _mlstm_bwd(
         block_shape=(BLOCK_KV, HEAD_DIM),
         order=(1, 0),
     )
+    # directly transpose matDeltaV while loading
     matDeltaV_block_ptr = tl.make_block_ptr(
         base=matDeltaV + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_dhts, stride_dhtd),
         offsets=(0, 0),
-        block_shape=(BLOCK_KV, HEAD_DIM),
-        order=(1, 0),
+        block_shape=(HEAD_DIM, BLOCK_KV),  # this is the transposed shape in SRAM
+        order=(
+            0,
+            1,
+        ),  # adapt the order to the underlying layout (which is not transposed), we load HEAD_DIM first
     )
 
     # ? LOADING AND INITIALIZATION
     # define kv_block_idxes for causal masking
     kv_offset = kvIdx * BLOCK_KV
-    kv_block_idxes = kv_offset + tl.arange(0, BLOCK_Q)
+    kv_offset = tl.multiple_of(kv_offset, BLOCK_KV)
+    kv_block_idxes = kv_offset + tl.arange(0, BLOCK_KV)
 
     # load matK_tile, matV_tile
-    matK_tile = tl.load(matK_block_ptr)
-    matV_tile = tl.load(matV_block_ptr)
+    matK_tile = tl.load(matK_block_ptr)  # (BLOCK_KV, HEAD_DIM)
+    matV_tile = tl.load(matV_block_ptr)  # (HEAD_DIM, BLOCK_KV)
     # init matDeltaK_tile, matDeltaV_tile accumulators
     matDeltaK_tile = tl.zeros([BLOCK_KV, HEAD_DIM], dtype=tl.float32)
     matDeltaV_tile = tl.zeros([BLOCK_KV, HEAD_DIM], dtype=tl.float32)
@@ -184,7 +203,7 @@ def _mlstm_bwd(
     vecI_chunk_KV_ptr = (
         vecI + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
     )
-    vecI_chunk_KV = tl.load(vecI_chunk_KV_ptr)
+    vecI_chunk_KV = tl.load(vecI_chunk_KV_ptr)  # (BLOCK_KV,)
 
     # init vecDeltaI_sum accumulator
     vecDeltaI_sum_chunk_KV = tl.zeros([BLOCK_KV], dtype=tl.float32)
@@ -201,8 +220,13 @@ def _mlstm_bwd(
     qEndIdx = tl.cdiv(N_CTX, BLOCK_Q)
     qEndIdx = tl.multiple_of(qEndIdx, BLOCK_Q)
 
-    # move (matDelta)Q_block_ptr to the position for the current thread block
+    # move mat(Delta)Q_block_ptr & matDeltaHtilde_block_ptr to the position for the current thread block
+    # input pointers:
     matQ_block_ptr = tl.advance(matQ_block_ptr, (qStartIdx * BLOCK_Q, 0))
+    matDeltaHtilde_block_ptr = tl.advance(
+        matDeltaHtilde_block_ptr, (qStartIdx * BLOCK_Q, 0)
+    )
+    # output pointers:
     matDeltaQ_block_ptr = tl.advance(matDeltaQ_block_ptr, (qStartIdx * BLOCK_Q, 0))
 
     # loop over BLOCK_Q dimension and update matDeltK, matDeltaV, vecDeltaI_sum accumulators
@@ -211,83 +235,101 @@ def _mlstm_bwd(
         q_offset = qIdx * BLOCK_Q
         q_offset = tl.multiple_of(q_offset, BLOCK_Q)
 
-        # TODO from here
-        # -- compute matS --
-        k = tl.load(matK_block_ptr)
-        matS = tl.dot(q, k)
-        matS = matS / qk_scale
+        # load matQ_tile & matDeltaHtilde_tile
+        matQ_tile = tl.load(matQ_block_ptr)  # (BLOCK_Q, HEAD_DIM)
+        matDeltaHtilde_tile = tl.load(matDeltaHtilde_block_ptr)  # (BLOCK_Q, HEAD_DIM)
 
-        # ? -- create gate matrix tile D --
-        # load vecF_cs_chunkKV
-        vecF_cs_vecI_chunkKV_offset = (
-            ifmn_batchhead_offset + start_n + tl.arange(0, BLOCK_KV)
+        # load vecM_chunk_Q, vecN_chunk_Q
+        vecMN_offsets = ifmn_batchhead_offset + q_offset + tl.arange(0, BLOCK_Q)
+        vecM_chunk_Q_ptr = vecM + vecMN_offsets
+        vecN_chunk_Q_ptr = vecN + vecMN_offsets
+
+        vecM_chunk_Q = tl.load(vecM_chunk_Q_ptr)  # (BLOCK_Q,)
+        vecN_chunk_Q = tl.load(vecN_chunk_Q_ptr)  # (BLOCK_Q,)
+
+        # load vecF_cs_chunk_Q
+        vecF_cs_chunk_Q_ptr = (
+            vecF_cs + ifmn_batchhead_offset + q_offset + tl.arange(0, BLOCK_Q)
         )
-        vecF_cs_chunkKV_ptr = vecF_cs + vecF_cs_vecI_chunkKV_offset
-        vecF_cs_chunkKV = tl.load(vecF_cs_chunkKV_ptr)
-        vecF_cs_chunkKV = vecF_cs_chunkKV.to(tl.float32)
+        vecF_cs_chunk_Q = tl.load(vecF_cs_chunk_Q_ptr)
+        vecF_cs_chunk_Q = vecF_cs_chunk_Q.to(tl.float32)
 
-        # load vecI_chunkKV
-        vecI_ptr = vecI + vecF_cs_vecI_chunkKV_offset
-        vecI_chunkKV = tl.load(vecI_ptr)
-        vecI_chunkKV = vecI_chunkKV.to(tl.float32)
+        # compute matDeltaC_tile
+        matDeltaC_tile = tl.dot(matDeltaHtilde_tile, matV_tile)  # (BLOCK_Q, BLOCK_KV)
+        matDeltaC_tile = matDeltaC_tile / (vecN_chunk_Q[:, None] + EPS)
 
-        # compute D matrix
-        matD_log_fgates = vecF_cs_chunk_KV[:, None] - vecF_cs_chunkKV[None, :]
-        matD = matD_log_fgates + vecI_chunkKV[None, :]
+        # ? recomputation of S & D matrices
+        # compute matS_tile
+        matK_tile_transposed = tl.trans(matK_tile, (1, 0))  # (HEAD_DIM, BLOCK_KV)
+        matS_tile = torch.dot(matQ_tile, matK_tile_transposed)  # (BLOCK_Q, BLOCK_KV)
+        matS_tile = matS_tile / qk_scale
 
-        # ? -- causal masking --
-        #! TODO with this if I get a weird error: operation scheduled before its operands
-        if start_n >= kv_offset:
+        # compute matLogD_tile
+        matLogD_Fgates_tile = vecF_cs_chunk_Q[:, None] - vecF_cs_chunk_KV[None, :]
+        matLogD_tile = matLogD_Fgates_tile + vecI_chunk_KV[None, :]
+
+        # causal masking
+        if kv_offset >= q_offset:
             # we are on diagonal
-            kv_block_idxes = start_n + tl.arange(0, BLOCK_KV)
+            q_block_idxes = q_offset + tl.arange(0, BLOCK_Q)
             mask = q_block_idxes[:, None] - kv_block_idxes[None, :]
-            matD = tl.where(mask >= 0, matD, -float("inf"))
+            # we set all values above the main diagonal to -inf
+            matLogD_tile = tl.where(mask >= 0, matLogD_tile, -float("inf"))
 
-        # else: below diagonal
+        # else: below main diagonal
 
-        # ? -- compute m_state --
-        m_temp = tl.max(matD, axis=1)  # rowwise max
-        m_temp = tl.maximum(MINIMUM_MAX_VAL, m_temp)  # elementwise max
-        m_new = tl.maximum(m_old, m_temp)
-        m_ratio = tl.exp(m_old - m_new)
+        matDprime_tile = tl.exp(
+            matLogD_tile - vecM_chunk_Q[:, None]
+        )  # (BLOCK_Q, BLOCK_KV)
+        # ? end recomputation of S & D matrices
 
-        # ? -- compute matC --
-        matD_tilde = tl.exp(matD - m_new[:, None])
-        matC = matS * matD_tilde
+        matDeltaCTilde_tile = matDeltaC_tile * matS_tile * matDprime_tile
 
-        # ? -- compute l_state --
-        # tl.fma did not bring performance improvement
-        l_temp = m_ratio * l_old
-        l_new = l_temp + tl.sum(matC, axis=1)
+        # compute sum for vecDeltaI
+        # sum up the columns of matDeltaCTilde_tile
+        vecDeltaI_sum_chunk_KV += tl.sum(matDeltaCTilde_tile, axis=0)  # (BLOCK_KV,)
 
-        # ? -- compute n_state --
-        n_new = tl.maximum(tl.abs(l_new), tl.exp(-m_new))
+        matP_tile = matDeltaC_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
+        matR_tile = matS_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
 
-        # ? -- compute h_out -- update h_out --
-        # compute weighting factor
-        # tl.fdiv did not bring any performance improvement
-        h_out_old_weight = (m_ratio * n_old) / n_new
-        h_out = h_out * h_out_old_weight[:, None]
+        # update matDeltaQ_tile in HBM
+        matDeltaQ_tile = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
+        matDeltaQ_tile = matDeltaQ_tile / qk_scale
+        tl.atomic_add(matDeltaQ_block_ptr, matDeltaQ_tile)
 
-        v = tl.load(matV_block_ptr)
+        # update matDeltaK_tile, matDeltaV_tile in SRAM
+        matP_tile_transposed = tl.trans(matP_tile, (1, 0))  # (BLOCK_KV, BLOCK_Q)
+        matDeltaK_tile_temp = tl.dot(
+            matP_tile_transposed, matQ_tile
+        )  # (BLOCK_KV, HEAD_DIM)
+        matDeltaK_tile += matDeltaK_tile_temp / qk_scale
 
-        matC = matC / n_new[:, None]
-        matC = matC.to(tl.float16)
-        h_out = tl.dot(matC, v, h_out)
+        matR_tile_transposed = tl.trans(matR_tile, (1, 0))  # (BLOCK_KV, BLOCK_Q)
+        matDeltaHtilde_tile_normalized = matDeltaHtilde_tile / (
+            vecN_chunk_Q[:, None] + EPS
+        )  # (BLOCK_Q, HEAD_DIM)
+        matDeltaV_tile += tl.dot(
+            matR_tile_transposed, matDeltaHtilde_tile_normalized
+        )  # (BLOCK_KV, HEAD_DIM)
 
-        matV_block_ptr = tl.advance(matV_block_ptr, (BLOCK_KV, 0))
-        matK_block_ptr = tl.advance(matK_block_ptr, (0, BLOCK_KV))
+        # advance pointers (delta_)Q + deltaHtilde
+        matQ_block_ptr = tl.advance(matQ_block_ptr, (BLOCK_Q, 0))
+        matDeltaQ_block_ptr = tl.advance(matDeltaQ_block_ptr, (BLOCK_Q, 0))
+        matDeltaHtilde_block_ptr = tl.advance(matDeltaHtilde_block_ptr, (BLOCK_Q, 0))
 
-        l_old = l_new
-        m_old = m_new
-        n_old = n_new
+        # ? END MAIN LOOP
 
     # epilogue
-    tl.store(H_block_ptr, h_out.to(matH.type.element_ty))
-    vecM_ptr = vecM + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_Q)
-    vecN_ptr = vecN + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_Q)
-    tl.store(vecM_ptr, m_old.to(vecM.type.element_ty))
-    tl.store(vecN_ptr, n_old.to(vecN.type.element_ty))
+    # store matDeltaK_tile, matDeltaV_tile
+    tl.store(matDeltaK_block_ptr, matDeltaK_tile.to(matDeltaK.type.element_ty))
+    tl.store(matDeltaV_block_ptr, matDeltaV_tile.to(matDeltaV.type.element_ty))
+    # store vecDeltaI_sum
+    vecDeltaI_chunk_KV_ptr = (
+        vecDeltaI + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
+    )
+    tl.store(
+        vecDeltaI_chunk_KV_ptr, vecDeltaI_sum_chunk_KV.to(vecDeltaI.type.element_ty)
+    )
 
 
 def mlstm_bw(
