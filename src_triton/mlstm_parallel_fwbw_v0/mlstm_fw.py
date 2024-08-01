@@ -101,6 +101,12 @@ def _mlstm_fwd(
     )
 
     # block pointers
+    # Note on order argument:
+    # For the K_block_ptr, the order=(0, 1) indicates that within each block, the kernel will access elements by
+    # first traversing along the HEAD_DIM dimension, and then along the BLOCK_KV dimension.
+    # This row-major access pattern aligns with typical matrix operations and can be beneficial
+    # for memory access efficiency, especially if HEAD_DIM elements are stored contiguously in memory.
+    # The order must match the underlying memory layout of the tensor.
     Q_block_ptr = tl.make_block_ptr(
         base=matQ + qkv_offset,
         shape=(N_CTX, HEAD_DIM),
