@@ -188,10 +188,10 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
                 idx_mask = bq_idxes[:, None] - kv_idxes[None, :]
                 matLogD_tile = torch.where(idx_mask < 0, -float("inf"), matLogD_tile)
 
-            matDtilde = torch.exp(matLogD_tile - vecM_chunk)
+            matDprime = torch.exp(matLogD_tile - vecM_chunk)
             # ? end recomputation of S & D matrices
 
-            matDeltaCtilde = matDeltaC * matS * matDtilde
+            matDeltaCtilde = matDeltaC * matS * matDprime
 
             # ? compute sum for vecDeltaF and vecDeltaI
             vecDeltaI_sum_chunk_KV += matDeltaCtilde.sum(dim=-2)
@@ -214,8 +214,8 @@ def mlstm_parallel_w_groupnorm_torch_tiled_bw(
             #         idx_mask < 0, 0.0, matDeltaCtilde_cumsum
             #     )
 
-            matP = matDeltaC * matDtilde
-            matR = matS * matDtilde
+            matP = matDeltaC * matDprime
+            matR = matS * matDprime
 
             matDeltaQ_tile = matP @ (matK_tile / math.sqrt(DH))
             # * store matDeltaQ in HBM (this access is in parallel at the same HBM location, e.g. must be atomic)
