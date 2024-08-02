@@ -1,3 +1,5 @@
+# Copyright JKU Linz 2024
+# Author: Maximilian Beck
 import math
 
 import torch
@@ -262,8 +264,9 @@ def _mlstm_bwd(
 
         # ? recomputation of S & D matrices
         # compute matS_tile
-        # tl.static_print("matK_tile", matK_tile)
         matK_tile_transposed = tl.trans(matK_tile)  # (HEAD_DIM, BLOCK_KV)
+        # tl.static_print("matK_tile_transposed", matK_tile_transposed)
+        # tl.static_print("matQ_tile", matQ_tile)
         matS_tile = tl.dot(matQ_tile, matK_tile_transposed)  # (BLOCK_Q, BLOCK_KV)
         matS_tile = matS_tile / qk_scale
 
@@ -294,9 +297,12 @@ def _mlstm_bwd(
 
         matP_tile = matDeltaC_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
         matR_tile = matS_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
+        matR_tile = matR_tile.to(tl.float16)
 
         # update matDeltaQ_tile in HBM
         matP_tile = matP_tile.to(tl.float16)
+        # tl.static_print("matP_tile", matP_tile)
+        # tl.static_print("matK_tile", matK_tile)
         matDeltaQ_tile = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
         matDeltaQ_tile = matDeltaQ_tile / qk_scale
         matDeltaQ_tile = matDeltaQ_tile.to(matDeltaQ_block_ptr.type.element_ty)
@@ -308,6 +314,8 @@ def _mlstm_bwd(
 
         # update matDeltaK_tile, matDeltaV_tile in SRAM
         matP_tile_transposed = tl.trans(matP_tile)  # (BLOCK_KV, BLOCK_Q)
+        # tl.static_print("matP_tile_transposed", matP_tile_transposed)
+        # tl.static_print("matQ_tile", matQ_tile)
         matDeltaK_tile_temp = tl.dot(
             matP_tile_transposed, matQ_tile
         )  # (BLOCK_KV, HEAD_DIM)
@@ -317,6 +325,11 @@ def _mlstm_bwd(
         matDeltaHtilde_tile_normalized = matDeltaHtilde_tile / (
             vecN_chunk_Q[:, None] + EPS
         )  # (BLOCK_Q, HEAD_DIM)
+        matDeltaHtilde_tile_normalized = matDeltaHtilde_tile_normalized.to(tl.float16)
+        # tl.static_print("matR_tile_transposed", matR_tile_transposed)
+        # tl.static_print(
+        #     "matDeltaHtilde_tile_normalized", matDeltaHtilde_tile_normalized
+        # )
         matDeltaV_tile += tl.dot(
             matR_tile_transposed, matDeltaHtilde_tile_normalized
         )  # (BLOCK_KV, HEAD_DIM)
@@ -380,7 +393,7 @@ def mlstm_bw(
         BS * NH,
         1,
     )
-    print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
+    # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
 
     ## ? preprocessing, initialization
     matDeltaQ = torch.empty_like(matQ)
@@ -436,9 +449,13 @@ def mlstm_bw(
 
     ## ? postprocessing
     # compute the vecDeltaFbar values with dfbar = rev_cumsum((q*dq - k*dk).sum(-1))
-    vecDeltaFbar_acc = (matQ * matDeltaQ - matK * matDeltaK).sum(-1)
+    # TODO should we cast to float32 here?
+    vecDeltaFbar_acc = (
+        matQ.to(dtype=torch.float32) * matDeltaQ.to(dtype=torch.float32)
+        - matK.to(dtype=torch.float32) * matDeltaK.to(dtype=torch.float32)
+    ).sum(-1)
     vecDeltaFbar = vecDeltaFbar_acc.flip(-1).cumsum(-1).flip(-1)
-    vecDeltaF = vecDeltaFbar * torch.sigmoid(-vecF)
+    vecDeltaF = (vecDeltaFbar * torch.sigmoid(-vecF)).to(dtype=vecF.dtype)
     ## ? end postprocessing
 
     return matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF

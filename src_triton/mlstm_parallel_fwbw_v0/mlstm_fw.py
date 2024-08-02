@@ -1,3 +1,5 @@
+# Copyright JKU Linz 2024
+# Author: Maximilian Beck
 import math
 
 import torch
