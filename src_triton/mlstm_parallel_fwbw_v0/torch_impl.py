@@ -369,36 +369,37 @@ def vlstm_parallel_w_groupnorm_torch_bw(
 
     delta_Dtilde = delta_D * var_D
 
-    # compute fgate and igate preact delta errors
-    # delta_f: forget gate preactivation delta errors
-    ltr_dm1 = torch.tril(
-        torch.ones(
-            (S, S),
-            dtype=torch.bool,
-            device=_device,
-        ),
-        diagonal=-1,  #! Also mask out the diagonal as it is constant 1 in the D matrix
-    )
-    masked_deltaDtilde = torch.where(
-        ltr_dm1,
-        delta_Dtilde,
-        torch.tensor(0.0, device=_device, dtype=_dtype),
-    )
+    # FGATE VARIANT 1: NAIVE
+    # # compute fgate and igate preact delta errors
+    # # delta_f: forget gate preactivation delta errors
+    # ltr_dm1 = torch.tril(
+    #     torch.ones(
+    #         (S, S),
+    #         dtype=torch.bool,
+    #         device=_device,
+    #     ),
+    #     diagonal=-1,  #! Also mask out the diagonal as it is constant 1 in the D matrix
+    # )
+    # masked_deltaDtilde = torch.where(
+    #     ltr_dm1,
+    #     delta_Dtilde,
+    #     torch.tensor(0.0, device=_device, dtype=_dtype),
+    # )
 
-    delta_fbar = torch.zeros((B, NH, S, 1), device=_device, dtype=_dtype)
-    # # first forget gate index (k=0) does not get a gradient (since it is not used in the forward pass)
-    # TODO implement this in a more efficient way
-    for k in range(1, S):
-        for j in range(k):
-            delta_fbar[:, :, k, 0] += (
-                masked_deltaDtilde[:, :, k:, j].view(B, NH, -1).sum(dim=-1)
-            )
-    # more efficient way would be
-    # delta_fbar = delta_Dtilde.cumsum(-1).tril(-1).sum(dim=-2)
+    # delta_fbar = torch.zeros((B, NH, S, 1), device=_device, dtype=_dtype)
+    # # # first forget gate index (k=0) does not get a gradient (since it is not used in the forward pass)
+    # # TODO implement this in a more efficient way
+    # for k in range(1, S):
+    #     for j in range(k):
+    #         delta_fbar[:, :, k, 0] += (
+    #             masked_deltaDtilde[:, :, k:, j].view(B, NH, -1).sum(dim=-1)
+    #         )
+    # # more efficient way would be
+    # # delta_fbar = delta_Dtilde.cumsum(-1).tril(-1).sum(dim=-2)
 
-    delta_f = delta_fbar * torch.sigmoid(-vecF)
-    #! DEBUG only
-    # delta_f = delta_fbar
+    # delta_f = delta_fbar * torch.sigmoid(-vecF)
+    # #! DEBUG only
+    # # delta_f = delta_fbar
 
     # delta_i: input gate preactivation delta errors
     delta_i = torch.sum(delta_Dtilde, dim=-2).unsqueeze_(-1)
@@ -410,6 +411,14 @@ def vlstm_parallel_w_groupnorm_torch_bw(
 
     var_C = var_QK * var_D
     delta_V = var_C.transpose(-2, -1) @ (matDeltaHtilde / (vecN + eps))
+
+    # FGATE VARIANT 3: EFFICIENT LINEAR ATTENTION TRICK
+    # compute the vecDeltaFbar values with dfbar = rev_cumsum((q*dq - k*dk).sum(-1))
+    vecDeltaFbar_acc = (matQ * delta_Q - matK * delta_K).sum(-1)
+    vecDeltaFbar = vecDeltaFbar_acc.flip(-1).cumsum(-1).flip(-1)
+    vecDeltaF = vecDeltaFbar * torch.sigmoid(-vecF.squeeze(-1))
+    delta_f = vecDeltaF.unsqueeze(-1)
+
     return delta_Q, delta_K, delta_V, delta_i, delta_f  # , delta_Dtilde
 
 
