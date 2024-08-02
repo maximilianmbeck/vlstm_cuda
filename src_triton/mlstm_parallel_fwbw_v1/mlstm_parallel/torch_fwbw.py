@@ -62,7 +62,7 @@ def mlstm_fw(
 
     matH = matC @ matV  # (B, NH, S, DH)
 
-    return matH, vecM.squeeze(-1), vecN.squeeze(-1), matLogSigF_mask
+    return matH, vecM.squeeze(-1), vecN.squeeze(-1)
 
 
 def mlstm_bw(
@@ -139,72 +139,60 @@ def mlstm_bw(
         matDeltaV,
         vecDeltaI,
         vecDeltaF,
-        matDeltaC,
-        matDeltaDtilde,
-        matD,
-        matCtilde,
     )
 
 
 def mlstm_fwbw(
-    queries: torch.Tensor,
-    keys: torch.Tensor,
-    values: torch.Tensor,
-    igate_preact: torch.Tensor,
-    fgate_preact: torch.Tensor,
+    matQ: torch.Tensor,
+    matK: torch.Tensor,
+    matV: torch.Tensor,
+    vecI: torch.Tensor,
+    vecF: torch.Tensor,
     eps: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    hiddens, var_n, var_m = vLSTMParallelFwBwWithGroupNorm.apply(
-        queries, keys, values, igate_preact, fgate_preact, eps
-    )
-    return hiddens, var_n, var_m
+    matH, _, _ = _mlstm_fwbw.apply(matQ, matK, matV, vecI, vecF, eps)
+    return matH
 
 
-class vLSTMParallelFwBwWithGroupNorm(torch.autograd.Function):
+class _mlstm_fwbw(torch.autograd.Function):
 
     @staticmethod
     def forward(
         ctx,
-        queries: torch.Tensor,
-        keys: torch.Tensor,
-        values: torch.Tensor,
-        igate_preact: torch.Tensor,
-        fgate_preact: torch.Tensor,
+        matQ: torch.Tensor,
+        matK: torch.Tensor,
+        matV: torch.Tensor,
+        vecI: torch.Tensor,
+        vecF: torch.Tensor,
         eps: float = 1e-6,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        hiddens, var_n, var_m = vlstm_parallel_fw_torch_w_groupnorm(
-            queries=queries,
-            keys=keys,
-            values=values,
-            igate_preact=igate_preact,
-            fgate_preact=fgate_preact,
+        matH, vecM, vecN = mlstm_fw(
+            matQ=matQ,
+            matK=matK,
+            matV=matV,
+            vecI=vecI,
+            vecF=vecF,
             eps=eps,
         )
-        ctx.save_for_backward(
-            queries, keys, values, igate_preact, fgate_preact, var_n, var_m
-        )
-        return hiddens, var_n, var_m
+        ctx.save_for_backward(matQ, matK, matV, vecI, vecF, vecM, vecN)
+        return matH, vecM, vecN
 
     @staticmethod
     def backward(
         ctx,
-        delta_Htilde: torch.Tensor,
-        grad_var_n_unused: torch.Tensor,
-        grad_var_m_unused: torch.Tensor,
+        matDeltaHtilde: torch.Tensor,
+        vecDeltaM_unused: torch.Tensor,
+        vecDeltaN_unused: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
-        (queries, keys, values, igate_preact, fgate_preact, var_n, var_m) = (
-            ctx.saved_tensors
+        (matQ, matK, matV, vecI, vecF, vecM, vecN) = ctx.saved_tensors
+        matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF = mlstm_bw(
+            matDeltaHtilde=matDeltaHtilde,
+            matQ=matQ,
+            matK=matK,
+            matV=matV,
+            vecI=vecI,
+            vecF=vecF,
+            vecM=vecM,
+            vecN=vecN,
         )
-        delta_Q, delta_K, delta_V, delta_i, delta_f, _, _, _, _, _ = (
-            vlstm_parallel_w_groupnorm_torch_bw(
-                matDeltaHtilde=delta_Htilde,
-                matQ=queries,
-                matK=keys,
-                matV=values,
-                vecI=igate_preact,
-                vecF=fgate_preact,
-                vecN=var_n,
-                vecM=var_m,
-            )
-        )
-        return delta_Q, delta_K, delta_V, delta_i, delta_f, None
+        return matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF, None
