@@ -237,6 +237,14 @@ def _mlstm_bwd(
         q_offset = qIdx * BLOCK_Q
         q_offset = tl.multiple_of(q_offset, BLOCK_Q)
 
+        q_off_range = q_offset + tl.arange(0, BLOCK_Q)
+        dh_off_range = tl.arange(0, HEAD_DIM)
+        matDeltaQ_ptr = (
+            matDeltaQ
+            + qkvh_batchhead_offset
+            + (q_off_range[:, None] * stride_qs + dh_off_range[None, :] * stride_qd)
+        )
+
         # load matQ_tile & matDeltaHtilde_tile
         matQ_tile = tl.load(matQ_block_ptr)  # (BLOCK_Q, HEAD_DIM)
         matDeltaHtilde_tile = tl.load(matDeltaHtilde_block_ptr)  # (BLOCK_Q, HEAD_DIM)
@@ -306,11 +314,20 @@ def _mlstm_bwd(
         matDeltaQ_tile = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
         matDeltaQ_tile = matDeltaQ_tile / qk_scale
         matDeltaQ_tile = matDeltaQ_tile.to(matDeltaQ_block_ptr.type.element_ty)
+
+        # seems that atomic add does not support block pointers
+        # see also this issue: https://github.com/triton-lang/triton/issues/2052
         # This gives: RuntimeError: PassManager::run failed
+        # loc("/home/max/myrepos/vlstm_cuda/src_triton/mlstm_parallel_fwbw_v0/mlstm_bw.py":313:43): error: 'tt.atomic_rmw' op failed to verify that ptr type matches value type
+        tl.static_print("matDeltaQ_tile", matDeltaQ_tile)
+        tl.static_print("matDeltaQ_block_ptr", matDeltaQ_block_ptr)
+        tl.static_print("matDeltaQ_ptr", matDeltaQ_ptr)
         # tl.atomic_add(matDeltaQ_block_ptr, matDeltaQ_tile)
-        matDeltaQ_global = tl.load(matDeltaQ_block_ptr, eviction_policy="evict_last")
-        matDeltaQ_global += matDeltaQ_tile
-        tl.store(matDeltaQ_block_ptr, matDeltaQ_global, eviction_policy="evict_last")
+        tl.atomic_add(matDeltaQ_ptr, matDeltaQ_tile, scope="gpu")
+
+        # matDeltaQ_global = tl.load(matDeltaQ_block_ptr, eviction_policy="evict_last")
+        # matDeltaQ_global += matDeltaQ_tile
+        # tl.store(matDeltaQ_block_ptr, matDeltaQ_global, eviction_policy="evict_last")
 
         # update matDeltaK_tile, matDeltaV_tile in SRAM
         matP_tile_transposed = tl.trans(matP_tile)  # (BLOCK_KV, BLOCK_Q)
