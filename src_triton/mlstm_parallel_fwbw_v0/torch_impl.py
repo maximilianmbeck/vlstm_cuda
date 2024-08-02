@@ -472,15 +472,15 @@ class vLSTMParallelFwBwWithGroupNorm(torch.autograd.Function):
             ctx.saved_tensors
         )
         delta_Q, delta_K, delta_V, delta_i, delta_f, _, _, _, _, _ = (
-            vlstm_parallel_bw_torch_w_groupnorm(
-                delta_Htilde=delta_Htilde,
-                queries=queries,
-                keys=keys,
-                values=values,
-                igate_preact=igate_preact,
-                fgate_preact=fgate_preact,
-                var_n=var_n,
-                var_m=var_m,
+            vlstm_parallel_w_groupnorm_torch_bw(
+                matDeltaHtilde=delta_Htilde,
+                matQ=queries,
+                matK=keys,
+                matV=values,
+                vecI=igate_preact,
+                vecF=fgate_preact,
+                vecN=var_n,
+                vecM=var_m,
             )
         )
         return delta_Q, delta_K, delta_V, delta_i, delta_f, None
