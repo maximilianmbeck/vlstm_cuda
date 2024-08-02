@@ -70,7 +70,7 @@ BLOCK_Q = 16
 BLOCK_KV = 16
 
 
-# @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
+@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
 def _mlstm_bwd_dkdv(
     matDeltaHtilde,
@@ -355,7 +355,7 @@ def _mlstm_bwd_dkdv(
     )
 
 
-# @triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
+@triton.autotune(list(filter(keep, configs)), key=["N_CTX", "HEAD_DIM"])
 @triton.jit
 def _mlstm_bwd_dQ(
     matDeltaHtilde,
@@ -612,17 +612,17 @@ def mlstm_bw(
     vecF_cs = torch.nn.functional.logsigmoid(vecF).cumsum(-1)
     ## ? end preprocessing
 
-    # grid_dKdV = lambda args: (
-    #     triton.cdiv(SL, args["BLOCK_KV_dKdV"]),
-    #     BS * NH,
-    #     1,
-    # )
-    # fix grid for debugging
     grid_dKdV = lambda args: (
-        triton.cdiv(SL, BLOCK_KV_dKdV),
+        triton.cdiv(SL, args["BLOCK_KV"]),
         BS * NH,
         1,
     )
+    # fix grid for debugging
+    # grid_dKdV = lambda args: (
+    #     triton.cdiv(SL, BLOCK_KV_dKdV),
+    #     BS * NH,
+    #     1,
+    # )
     # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
 
     # strides for matQ, matK, matV are same as matDeltaQ, matDeltaK, matDeltaV
@@ -663,21 +663,21 @@ def mlstm_bw(
         H=NH,
         N_CTX=SL,
         HEAD_DIM=HEAD_DIM_K,
-        BLOCK_Q=BLOCK_Q_dKdV,
-        BLOCK_KV=BLOCK_KV_dKdV,
+        # BLOCK_Q=BLOCK_Q_dKdV,
+        # BLOCK_KV=BLOCK_KV_dKdV,
     )
 
-    # grid_dQ = lambda args: (
-    #     triton.cdiv(SL, args["BLOCK_Q_dQ"]),
-    #     BS * NH,
-    #     1,
-    # )
-    # fix grid for debugging
     grid_dQ = lambda args: (
-        triton.cdiv(SL, BLOCK_Q_dQ),
+        triton.cdiv(SL, args["BLOCK_Q"]),
         BS * NH,
         1,
     )
+    # fix grid for debugging
+    # grid_dQ = lambda args: (
+    #     triton.cdiv(SL, BLOCK_Q_dQ),
+    #     BS * NH,
+    #     1,
+    # )
     # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
 
     _mlstm_bwd_dQ[grid_dQ](
@@ -717,8 +717,8 @@ def mlstm_bw(
         H=NH,
         N_CTX=SL,
         HEAD_DIM=HEAD_DIM_K,
-        BLOCK_Q=BLOCK_Q_dQ,
-        BLOCK_KV=BLOCK_KV_dQ,
+        # BLOCK_Q=BLOCK_Q_dQ,
+        # BLOCK_KV=BLOCK_KV_dQ,
     )
 
     ## ? postprocessing
