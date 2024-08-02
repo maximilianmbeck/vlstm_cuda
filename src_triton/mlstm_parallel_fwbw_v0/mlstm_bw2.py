@@ -495,10 +495,11 @@ def _mlstm_bwd_dQ(
     matDeltaQ_tile = tl.zeros([BLOCK_Q, HEAD_DIM], dtype=tl.float32)
 
     # ? LOOP1: compute matDeltaK, matDeltaV, vecDeltaI_sum
-    kvEndIdx = tl.cdiv(qIdx * BLOCK_Q, BLOCK_KV)
+    kvEndIdx = tl.cdiv((qIdx + 1) * BLOCK_Q, BLOCK_KV)
 
     # loop over BLOCK_Q dimension and update matDeltK, matDeltaV, vecDeltaI_sum accumulators
     for kvIdx in range(0, kvEndIdx):
+        # tl.device_print("kvIdx: %d\n", kvIdx)
         kv_offset = kvIdx * BLOCK_KV
         kv_offset = tl.multiple_of(kv_offset, BLOCK_Q)
 
@@ -679,46 +680,46 @@ def mlstm_bw(
     )
     # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
 
-    # _mlstm_bwd_dQ[grid_dQ](
-    #     matDeltaHtilde=matDeltaHtilde.contiguous(),
-    #     matQ=matQ.contiguous(),
-    #     matK=matK.contiguous(),
-    #     matV=matV.contiguous(),
-    #     vecI=vecI.contiguous(),
-    #     vecF_cs=vecF_cs.contiguous(),
-    #     vecM=vecM.contiguous(),
-    #     vecN=vecN.contiguous(),
-    #     qk_scale=math.sqrt(HEAD_DIM_Q),
-    #     matDeltaQ=matDeltaQ,
-    #     matDeltaK=matDeltaK,
-    #     matDeltaV=matDeltaV,
-    #     vecDeltaI=vecDeltaI,
-    #     stride_dhtz=matDeltaHtilde.stride(0),
-    #     stride_dhth=matDeltaHtilde.stride(1),
-    #     stride_dhts=matDeltaHtilde.stride(2),
-    #     stride_dhtd=matDeltaHtilde.stride(3),
-    #     stride_qz=matQ.stride(0),
-    #     stride_qh=matQ.stride(1),
-    #     stride_qs=matQ.stride(2),
-    #     stride_qd=matQ.stride(3),
-    #     stride_kz=matK.stride(0),
-    #     stride_kh=matK.stride(1),
-    #     stride_ks=matK.stride(2),
-    #     stride_kd=matK.stride(3),
-    #     stride_vz=matV.stride(0),
-    #     stride_vh=matV.stride(1),
-    #     stride_vs=matV.stride(2),
-    #     stride_vd=matV.stride(3),
-    #     stride_ifmn_z=vecF_cs.stride(0),
-    #     stride_ifmn_h=vecF_cs.stride(1),
-    #     stride_ifmn_s=vecF_cs.stride(2),
-    #     Z=BS,
-    #     H=NH,
-    #     N_CTX=SL,
-    #     HEAD_DIM=HEAD_DIM_K,
-    #     BLOCK_Q=BLOCK_Q_dQ,
-    #     BLOCK_KV=BLOCK_KV_dQ,
-    # )
+    _mlstm_bwd_dQ[grid_dQ](
+        matDeltaHtilde=matDeltaHtilde.contiguous(),
+        matQ=matQ.contiguous(),
+        matK=matK.contiguous(),
+        matV=matV.contiguous(),
+        vecI=vecI.contiguous(),
+        vecF_cs=vecF_cs.contiguous(),
+        vecM=vecM.contiguous(),
+        vecN=vecN.contiguous(),
+        qk_scale=math.sqrt(HEAD_DIM_Q),
+        matDeltaQ=matDeltaQ,
+        matDeltaK=matDeltaK,
+        matDeltaV=matDeltaV,
+        vecDeltaI=vecDeltaI,
+        stride_dhtz=matDeltaHtilde.stride(0),
+        stride_dhth=matDeltaHtilde.stride(1),
+        stride_dhts=matDeltaHtilde.stride(2),
+        stride_dhtd=matDeltaHtilde.stride(3),
+        stride_qz=matQ.stride(0),
+        stride_qh=matQ.stride(1),
+        stride_qs=matQ.stride(2),
+        stride_qd=matQ.stride(3),
+        stride_kz=matK.stride(0),
+        stride_kh=matK.stride(1),
+        stride_ks=matK.stride(2),
+        stride_kd=matK.stride(3),
+        stride_vz=matV.stride(0),
+        stride_vh=matV.stride(1),
+        stride_vs=matV.stride(2),
+        stride_vd=matV.stride(3),
+        stride_ifmn_z=vecF_cs.stride(0),
+        stride_ifmn_h=vecF_cs.stride(1),
+        stride_ifmn_s=vecF_cs.stride(2),
+        Z=BS,
+        H=NH,
+        N_CTX=SL,
+        HEAD_DIM=HEAD_DIM_K,
+        BLOCK_Q=BLOCK_Q_dQ,
+        BLOCK_KV=BLOCK_KV_dQ,
+    )
 
     ## ? postprocessing
     # compute the vecDeltaFbar values with dfbar = rev_cumsum((q*dq - k*dk).sum(-1))
