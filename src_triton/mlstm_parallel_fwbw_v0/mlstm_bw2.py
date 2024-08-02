@@ -172,14 +172,14 @@ def _mlstm_bwd_dkdv(
     )
 
     # output block pointers
-    matDeltaQ_block_ptr = tl.make_block_ptr(
-        base=matDeltaQ + qkvh_batchhead_offset,
-        shape=(N_CTX, HEAD_DIM),
-        strides=(stride_dhts, stride_dhtd),
-        offsets=(0, 0),
-        block_shape=(BLOCK_Q, HEAD_DIM),
-        order=(1, 0),
-    )
+    # matDeltaQ_block_ptr = tl.make_block_ptr(
+    #     base=matDeltaQ + qkvh_batchhead_offset,
+    #     shape=(N_CTX, HEAD_DIM),
+    #     strides=(stride_dhts, stride_dhtd),
+    #     offsets=(0, 0),
+    #     block_shape=(BLOCK_Q, HEAD_DIM),
+    #     order=(1, 0),
+    # )
     matDeltaK_block_ptr = tl.make_block_ptr(
         base=matDeltaK + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
@@ -238,7 +238,7 @@ def _mlstm_bwd_dkdv(
         matDeltaHtilde_block_ptr, (qStartIdx * BLOCK_Q, 0)
     )
     # output pointers:
-    matDeltaQ_block_ptr = tl.advance(matDeltaQ_block_ptr, (qStartIdx * BLOCK_Q, 0))
+    # matDeltaQ_block_ptr = tl.advance(matDeltaQ_block_ptr, (qStartIdx * BLOCK_Q, 0))
 
     # loop over BLOCK_Q dimension and update matDeltK, matDeltaV, vecDeltaI_sum accumulators
     for qIdx in range(qStartIdx, qEndIdx):
@@ -311,9 +311,9 @@ def _mlstm_bwd_dkdv(
         matP_tile = matP_tile.to(tl.float16)
         # tl.static_print("matP_tile", matP_tile)
         # tl.static_print("matK_tile", matK_tile)
-        matDeltaQ_tile = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
-        matDeltaQ_tile = matDeltaQ_tile / qk_scale
-        matDeltaQ_tile = matDeltaQ_tile.to(matDeltaQ_block_ptr.type.element_ty)
+        # matDeltaQ_tile = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
+        # matDeltaQ_tile = matDeltaQ_tile / qk_scale
+        # matDeltaQ_tile = matDeltaQ_tile.to(matDeltaQ_block_ptr.type.element_ty)
 
         # update matDeltaK_tile, matDeltaV_tile in SRAM
         matP_tile_transposed = tl.trans(matP_tile)  # (BLOCK_KV, BLOCK_Q)
@@ -405,7 +405,7 @@ def _mlstm_bwd_dQ(
     # d: head dimension
 
     tl.static_assert(BLOCK_KV <= HEAD_DIM)
-    kvIdx = tl.program_id(0)
+    qIdx = tl.program_id(0)
     off_hz = tl.program_id(1)
     off_z = off_hz // H
     off_h = off_hz % H
@@ -423,7 +423,7 @@ def _mlstm_bwd_dQ(
         base=matDeltaHtilde + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_dhts, stride_dhtd),
-        offsets=(0, 0),
+        offsets=(qIdx * BLOCK_Q, 0),
         block_shape=(BLOCK_Q, HEAD_DIM),
         order=(1, 0),
     )
@@ -431,7 +431,7 @@ def _mlstm_bwd_dQ(
         base=matQ + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_qs, stride_qd),
-        offsets=(0, 0),
+        offsets=(qIdx * BLOCK_Q, 0),
         block_shape=(BLOCK_Q, HEAD_DIM),
         order=(1, 0),
     )
@@ -439,7 +439,7 @@ def _mlstm_bwd_dQ(
         base=matK + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_ks, stride_kd),
-        offsets=(kvIdx * BLOCK_KV, 0),
+        offsets=(0, 0),
         block_shape=(BLOCK_KV, HEAD_DIM),
         order=(1, 0),
     )
@@ -448,7 +448,7 @@ def _mlstm_bwd_dQ(
         base=matV + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_vd, stride_vs),
-        offsets=(0, kvIdx * BLOCK_KV),
+        offsets=(0, 0),
         block_shape=(HEAD_DIM, BLOCK_KV),  # this is the transposed shape in SRAM
         order=(
             0,
@@ -461,93 +461,63 @@ def _mlstm_bwd_dQ(
         base=matDeltaQ + qkvh_batchhead_offset,
         shape=(N_CTX, HEAD_DIM),
         strides=(stride_dhts, stride_dhtd),
-        offsets=(0, 0),
+        offsets=(qIdx * BLOCK_Q, 0),
         block_shape=(BLOCK_Q, HEAD_DIM),
-        order=(1, 0),
-    )
-    matDeltaK_block_ptr = tl.make_block_ptr(
-        base=matDeltaK + qkvh_batchhead_offset,
-        shape=(N_CTX, HEAD_DIM),
-        strides=(stride_dhts, stride_dhtd),
-        offsets=(kvIdx * BLOCK_KV, 0),
-        block_shape=(BLOCK_KV, HEAD_DIM),
-        order=(1, 0),
-    )
-    matDeltaV_block_ptr = tl.make_block_ptr(
-        base=matDeltaV + qkvh_batchhead_offset,
-        shape=(N_CTX, HEAD_DIM),
-        strides=(stride_dhts, stride_dhtd),
-        offsets=(kvIdx * BLOCK_KV, 0),
-        block_shape=(BLOCK_KV, HEAD_DIM),
         order=(1, 0),
     )
 
     # ? LOADING AND INITIALIZATION
-    # define kv_block_idxes for causal masking
-    kv_offset = kvIdx * BLOCK_KV
-    kv_offset = tl.multiple_of(kv_offset, BLOCK_KV)
-    kv_block_idxes = kv_offset + tl.arange(0, BLOCK_KV)
+    # define q_block_idxes for causal masking
+    q_offset = qIdx * BLOCK_Q
+    q_offset = tl.multiple_of(q_offset, BLOCK_Q)
+    q_block_idxes = q_offset + tl.arange(0, BLOCK_Q)
 
-    # load matK_tile, matV_tile
-    matK_tile = tl.load(matK_block_ptr)  # (BLOCK_KV, HEAD_DIM)
-    matV_tile = tl.load(matV_block_ptr)  # (HEAD_DIM, BLOCK_KV)
-    # init matDeltaK_tile, matDeltaV_tile accumulators
-    matDeltaK_tile = tl.zeros([BLOCK_KV, HEAD_DIM], dtype=tl.float32)
-    matDeltaV_tile = tl.zeros([BLOCK_KV, HEAD_DIM], dtype=tl.float32)
+    # load matQ_tile & matDeltaHtilde_tile
+    matQ_tile = tl.load(matQ_block_ptr)  # (BLOCK_Q, HEAD_DIM)
+    matDeltaHtilde_tile = tl.load(matDeltaHtilde_block_ptr)  # (BLOCK_Q, HEAD_DIM)
 
-    # load vecI_chunk
-    vecI_chunk_KV_ptr = (
-        vecI + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
+    # load vecM_chunk_Q, vecN_chunk_Q
+    vecMN_offsets = ifmn_batchhead_offset + q_offset + tl.arange(0, BLOCK_Q)
+    vecM_chunk_Q_ptr = vecM + vecMN_offsets
+    vecN_chunk_Q_ptr = vecN + vecMN_offsets
+
+    vecM_chunk_Q = tl.load(vecM_chunk_Q_ptr)  # (BLOCK_Q,)
+    vecN_chunk_Q = tl.load(vecN_chunk_Q_ptr)  # (BLOCK_Q,)
+
+    # load vecF_cs_chunk_Q
+    vecF_cs_chunk_Q_ptr = (
+        vecF_cs + ifmn_batchhead_offset + q_offset + tl.arange(0, BLOCK_Q)
     )
-    vecI_chunk_KV = tl.load(vecI_chunk_KV_ptr)  # (BLOCK_KV,)
+    vecF_cs_chunk_Q = tl.load(vecF_cs_chunk_Q_ptr)
+    vecF_cs_chunk_Q = vecF_cs_chunk_Q.to(tl.float32)
 
-    # init vecDeltaI_sum accumulator
-    vecDeltaI_sum_chunk_KV = tl.zeros([BLOCK_KV], dtype=tl.float32)
-
-    # load vecF_cs_chunk_KV
-    vecF_cs_chunk_KV_ptr = (
-        vecF_cs + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
-    )
-    vecF_cs_chunk_KV = tl.load(vecF_cs_chunk_KV_ptr)
-    vecF_cs_chunk_KV = vecF_cs_chunk_KV.to(tl.float32)
+    # init matDeltaQ_tile accumulator
+    matDeltaQ_tile = tl.zeros([BLOCK_Q, HEAD_DIM], dtype=tl.float32)
 
     # ? LOOP1: compute matDeltaK, matDeltaV, vecDeltaI_sum
-    qStartIdx = (kvIdx * BLOCK_KV) // BLOCK_Q
-    qEndIdx = tl.cdiv(N_CTX, BLOCK_Q)
-    qEndIdx = tl.multiple_of(qEndIdx, BLOCK_Q)
-
-    # move mat(Delta)Q_block_ptr & matDeltaHtilde_block_ptr to the position for the current thread block
-    # input pointers:
-    matQ_block_ptr = tl.advance(matQ_block_ptr, (qStartIdx * BLOCK_Q, 0))
-    matDeltaHtilde_block_ptr = tl.advance(
-        matDeltaHtilde_block_ptr, (qStartIdx * BLOCK_Q, 0)
-    )
-    # output pointers:
-    matDeltaQ_block_ptr = tl.advance(matDeltaQ_block_ptr, (qStartIdx * BLOCK_Q, 0))
+    kvEndIdx = tl.cdiv(qIdx * BLOCK_Q, BLOCK_KV)
 
     # loop over BLOCK_Q dimension and update matDeltK, matDeltaV, vecDeltaI_sum accumulators
-    for qIdx in range(qStartIdx, qEndIdx):
-        q_offset = qIdx * BLOCK_Q
-        q_offset = tl.multiple_of(q_offset, BLOCK_Q)
+    for kvIdx in range(0, kvEndIdx):
+        kv_offset = kvIdx * BLOCK_KV
+        kv_offset = tl.multiple_of(kv_offset, BLOCK_Q)
 
-        # load matQ_tile & matDeltaHtilde_tile
-        matQ_tile = tl.load(matQ_block_ptr)  # (BLOCK_Q, HEAD_DIM)
-        matDeltaHtilde_tile = tl.load(matDeltaHtilde_block_ptr)  # (BLOCK_Q, HEAD_DIM)
-
-        # load vecM_chunk_Q, vecN_chunk_Q
-        vecMN_offsets = ifmn_batchhead_offset + q_offset + tl.arange(0, BLOCK_Q)
-        vecM_chunk_Q_ptr = vecM + vecMN_offsets
-        vecN_chunk_Q_ptr = vecN + vecMN_offsets
-
-        vecM_chunk_Q = tl.load(vecM_chunk_Q_ptr)  # (BLOCK_Q,)
-        vecN_chunk_Q = tl.load(vecN_chunk_Q_ptr)  # (BLOCK_Q,)
-
-        # load vecF_cs_chunk_Q
-        vecF_cs_chunk_Q_ptr = (
-            vecF_cs + ifmn_batchhead_offset + q_offset + tl.arange(0, BLOCK_Q)
+        # load vecF_cs_chunk_KV
+        vecF_cs_chunk_KV_ptr = (
+            vecF_cs + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
         )
-        vecF_cs_chunk_Q = tl.load(vecF_cs_chunk_Q_ptr)
-        vecF_cs_chunk_Q = vecF_cs_chunk_Q.to(tl.float32)
+        vecF_cs_chunk_KV = tl.load(vecF_cs_chunk_KV_ptr)
+        vecF_cs_chunk_KV = vecF_cs_chunk_KV.to(tl.float32)
+
+        # load vecI_chunk
+        vecI_chunk_KV_ptr = (
+            vecI + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
+        )
+        vecI_chunk_KV = tl.load(vecI_chunk_KV_ptr)  # (BLOCK_KV,)
+
+        # load matK_tile & matV_tile
+        matK_tile = tl.load(matK_block_ptr)  # (BLOCK_KV, HEAD_DIM)
+        matV_tile = tl.load(matV_block_ptr)  # (HEAD_DIM, BLOCK_KV)
 
         # compute matDeltaC_tile
         # tl.static_print("matDeltaHtilde_tile", matDeltaHtilde_tile)
@@ -570,7 +540,7 @@ def _mlstm_bwd_dQ(
         # causal masking
         if kv_offset >= q_offset:
             # we are on diagonal
-            q_block_idxes = q_offset + tl.arange(0, BLOCK_Q)
+            kv_block_idxes = kv_offset + tl.arange(0, BLOCK_KV)
             mask = q_block_idxes[:, None] - kv_block_idxes[None, :]
             # we set all values above the main diagonal to -inf
             matLogD_tile = tl.where(mask >= 0, matLogD_tile, -float("inf"))
@@ -582,62 +552,23 @@ def _mlstm_bwd_dQ(
         )  # (BLOCK_Q, BLOCK_KV)
         # ? end recomputation of S & D matrices
 
-        matDeltaCTilde_tile = matDeltaC_tile * matS_tile * matDprime_tile
-
-        # compute sum for vecDeltaI
-        # sum up the columns of matDeltaCTilde_tile
-        vecDeltaI_sum_chunk_KV += tl.sum(matDeltaCTilde_tile, axis=0)  # (BLOCK_KV,)
-
         matP_tile = matDeltaC_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
-        matR_tile = matS_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
-        matR_tile = matR_tile.to(tl.float16)
 
-        # update matDeltaQ_tile in HBM
+        # update matDeltaQ_tile in SRAM
         matP_tile = matP_tile.to(tl.float16)
         # tl.static_print("matP_tile", matP_tile)
         # tl.static_print("matK_tile", matK_tile)
-        matDeltaQ_tile = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
-        matDeltaQ_tile = matDeltaQ_tile / qk_scale
-        matDeltaQ_tile = matDeltaQ_tile.to(matDeltaQ_block_ptr.type.element_ty)
+        matDeltaQ_tile_iter = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
+        matDeltaQ_tile_iter = matDeltaQ_tile_iter / qk_scale
+        matDeltaQ_tile += matDeltaQ_tile_iter
 
-        # update matDeltaK_tile, matDeltaV_tile in SRAM
-        matP_tile_transposed = tl.trans(matP_tile)  # (BLOCK_KV, BLOCK_Q)
-        # tl.static_print("matP_tile_transposed", matP_tile_transposed)
-        # tl.static_print("matQ_tile", matQ_tile)
-        matDeltaK_tile_temp = tl.dot(
-            matP_tile_transposed, matQ_tile
-        )  # (BLOCK_KV, HEAD_DIM)
-        matDeltaK_tile += matDeltaK_tile_temp / qk_scale
-
-        matR_tile_transposed = tl.trans(matR_tile)  # (BLOCK_KV, BLOCK_Q)
-        matDeltaHtilde_tile_normalized = matDeltaHtilde_tile / (
-            vecN_chunk_Q[:, None] + EPS
-        )  # (BLOCK_Q, HEAD_DIM)
-        matDeltaHtilde_tile_normalized = matDeltaHtilde_tile_normalized.to(tl.float16)
-        # tl.static_print("matR_tile_transposed", matR_tile_transposed)
-        # tl.static_print(
-        #     "matDeltaHtilde_tile_normalized", matDeltaHtilde_tile_normalized
-        # )
-        matDeltaV_tile += tl.dot(
-            matR_tile_transposed, matDeltaHtilde_tile_normalized
-        )  # (BLOCK_KV, HEAD_DIM)
-
-        # advance pointers (delta_)Q + deltaHtilde
-        matQ_block_ptr = tl.advance(matQ_block_ptr, (BLOCK_Q, 0))
-        matDeltaHtilde_block_ptr = tl.advance(matDeltaHtilde_block_ptr, (BLOCK_Q, 0))
+        # advance pointers matK, matV
+        matK_block_ptr = tl.advance(matK_block_ptr, (BLOCK_KV, 0))
+        matV_block_ptr = tl.advance(matV_block_ptr, (0, BLOCK_KV))
         # ? END LOOP1
 
     # epilogue
-    # store matDeltaK_tile, matDeltaV_tile
-    tl.store(matDeltaK_block_ptr, matDeltaK_tile.to(matDeltaK.type.element_ty))
-    tl.store(matDeltaV_block_ptr, matDeltaV_tile.to(matDeltaV.type.element_ty))
-    # store vecDeltaI_sum
-    vecDeltaI_chunk_KV_ptr = (
-        vecDeltaI + ifmn_batchhead_offset + kv_offset + tl.arange(0, BLOCK_KV)
-    )
-    tl.store(
-        vecDeltaI_chunk_KV_ptr, vecDeltaI_sum_chunk_KV.to(vecDeltaI.type.element_ty)
-    )
+    tl.store(matDeltaQ_block_ptr, matDeltaQ_tile.to(matDeltaQ.type.element_ty))
 
 
 def mlstm_bw(
@@ -671,7 +602,7 @@ def mlstm_bw(
     # assert HEAD_DIM_K in {16, 32, 64, 128, 256}
 
     ## ? preprocessing, initialization
-    matDeltaQ = torch.empty_like(matQ)
+    matDeltaQ = torch.ones_like(matQ)
     matDeltaK = torch.empty_like(matK)
     matDeltaV = torch.empty_like(matV)
 
@@ -736,58 +667,58 @@ def mlstm_bw(
     )
 
     # grid_dQ = lambda args: (
-    #     triton.cdiv(SL, args["BLOCK_KV_dQ"]),
+    #     triton.cdiv(SL, args["BLOCK_Q_dQ"]),
     #     BS * NH,
     #     1,
     # )
     # fix grid for debugging
     grid_dQ = lambda args: (
-        triton.cdiv(SL, BLOCK_KV_dQ),
+        triton.cdiv(SL, BLOCK_Q_dQ),
         BS * NH,
         1,
     )
     # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
 
-    _mlstm_bwd_dQ[grid_dKdV](
-        matDeltaHtilde=matDeltaHtilde.contiguous(),
-        matQ=matQ.contiguous(),
-        matK=matK.contiguous(),
-        matV=matV.contiguous(),
-        vecI=vecI.contiguous(),
-        vecF_cs=vecF_cs.contiguous(),
-        vecM=vecM.contiguous(),
-        vecN=vecN.contiguous(),
-        qk_scale=math.sqrt(HEAD_DIM_Q),
-        matDeltaQ=matDeltaQ,
-        matDeltaK=matDeltaK,
-        matDeltaV=matDeltaV,
-        vecDeltaI=vecDeltaI,
-        stride_dhtz=matDeltaHtilde.stride(0),
-        stride_dhth=matDeltaHtilde.stride(1),
-        stride_dhts=matDeltaHtilde.stride(2),
-        stride_dhtd=matDeltaHtilde.stride(3),
-        stride_qz=matQ.stride(0),
-        stride_qh=matQ.stride(1),
-        stride_qs=matQ.stride(2),
-        stride_qd=matQ.stride(3),
-        stride_kz=matK.stride(0),
-        stride_kh=matK.stride(1),
-        stride_ks=matK.stride(2),
-        stride_kd=matK.stride(3),
-        stride_vz=matV.stride(0),
-        stride_vh=matV.stride(1),
-        stride_vs=matV.stride(2),
-        stride_vd=matV.stride(3),
-        stride_ifmn_z=vecF_cs.stride(0),
-        stride_ifmn_h=vecF_cs.stride(1),
-        stride_ifmn_s=vecF_cs.stride(2),
-        Z=BS,
-        H=NH,
-        N_CTX=SL,
-        HEAD_DIM=HEAD_DIM_K,
-        BLOCK_Q=BLOCK_Q_dKdV,
-        BLOCK_KV=BLOCK_KV_dKdV,
-    )
+    # _mlstm_bwd_dQ[grid_dQ](
+    #     matDeltaHtilde=matDeltaHtilde.contiguous(),
+    #     matQ=matQ.contiguous(),
+    #     matK=matK.contiguous(),
+    #     matV=matV.contiguous(),
+    #     vecI=vecI.contiguous(),
+    #     vecF_cs=vecF_cs.contiguous(),
+    #     vecM=vecM.contiguous(),
+    #     vecN=vecN.contiguous(),
+    #     qk_scale=math.sqrt(HEAD_DIM_Q),
+    #     matDeltaQ=matDeltaQ,
+    #     matDeltaK=matDeltaK,
+    #     matDeltaV=matDeltaV,
+    #     vecDeltaI=vecDeltaI,
+    #     stride_dhtz=matDeltaHtilde.stride(0),
+    #     stride_dhth=matDeltaHtilde.stride(1),
+    #     stride_dhts=matDeltaHtilde.stride(2),
+    #     stride_dhtd=matDeltaHtilde.stride(3),
+    #     stride_qz=matQ.stride(0),
+    #     stride_qh=matQ.stride(1),
+    #     stride_qs=matQ.stride(2),
+    #     stride_qd=matQ.stride(3),
+    #     stride_kz=matK.stride(0),
+    #     stride_kh=matK.stride(1),
+    #     stride_ks=matK.stride(2),
+    #     stride_kd=matK.stride(3),
+    #     stride_vz=matV.stride(0),
+    #     stride_vh=matV.stride(1),
+    #     stride_vs=matV.stride(2),
+    #     stride_vd=matV.stride(3),
+    #     stride_ifmn_z=vecF_cs.stride(0),
+    #     stride_ifmn_h=vecF_cs.stride(1),
+    #     stride_ifmn_s=vecF_cs.stride(2),
+    #     Z=BS,
+    #     H=NH,
+    #     N_CTX=SL,
+    #     HEAD_DIM=HEAD_DIM_K,
+    #     BLOCK_Q=BLOCK_Q_dQ,
+    #     BLOCK_KV=BLOCK_KV_dQ,
+    # )
 
     ## ? postprocessing
     # compute the vecDeltaFbar values with dfbar = rev_cumsum((q*dq - k*dk).sum(-1))
