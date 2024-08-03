@@ -2,7 +2,7 @@ import torch
 import triton
 from mlstm_fw import mlstm_fw
 
-from src_triton.mlstm_parallel_fwbw_v1.mlstm_parallel.torch_fwbw import (
+from src_triton.mlstm_parallel_fwbw_v1.mlstm_parallel._torch_fwbw_legacy import (
     vlstm_fw_torch_ref,
 )
 

@@ -17,26 +17,26 @@ TODOs until production readiness:
 
 **Metric in milliseconds**
 
-mlstm_parallel_fwbw-batch1-head8-d64:
-    N_CTX  mLSTM PT Autograd Compile  mLSTM Triton
-0   256.0                   0.134752      0.137492
-1   512.0                   0.386205      0.259211
-2  1024.0                   1.451759      0.595682
-3  2048.0                   6.033095      1.607347
-4  4096.0                  27.402861      5.174607
+mlstm_parallel_fwbw_fw-batch1-head8-d64:
+    N_CTX  mLSTM PT Autograd Compile FWBW  mLSTM Triton FWBW  mLSTM PT Autograd Compile FW  mLSTM Triton FW
+0   256.0                        0.118374           0.519061                      0.040797         0.030254
+1   512.0                        0.388854           0.277450                      0.131670         0.054715
+2  1024.0                        1.378533           0.598020                      0.375019         0.124451
+3  2048.0                        6.281271           1.618509                      1.598742         0.355323
+4  4096.0                       32.691319           5.502702                      6.633487         1.245179
 
-mlstm_parallel_fwbw-batch1-head8-d128:
-    N_CTX  mLSTM PT Autograd Compile  mLSTM Triton
-0   256.0                   0.154278      0.213272
-1   512.0                   0.427126      0.397416
-2  1024.0                   1.611108      1.037117
-3  2048.0                   6.424649      3.276074
-4  4096.0                  26.911402     10.022568
+mlstm_parallel_fwbw_fw-batch1-head8-d128:
+    N_CTX  mLSTM PT Autograd Compile FWBW  mLSTM Triton FWBW  mLSTM PT Autograd Compile FW  mLSTM Triton FW
+0   256.0                        0.199337           0.207912                      0.057782         0.048669
+1   512.0                        0.454639           0.450522                      0.165261         0.082363
+2  1024.0                        1.601133           1.077663                      0.497016         0.254517
+3  2048.0                        7.497245           3.267866                      1.690359         0.695027
+4  4096.0                       33.677311          10.293648                      7.265906         2.473338
 
-mlstm_parallel_fwbw-batch1-head8-d256:
-    N_CTX  mLSTM PT Autograd Compile  mLSTM Triton
-0   256.0                   0.220664      0.307998
-1   512.0                   0.582464      0.732306
-2  1024.0                   2.213279      2.358819
-3  2048.0                   8.997788      7.414556
-4  4096.0                  34.885422     27.908865
+mlstm_parallel_fwbw_fw-batch1-head8-d256:
+    N_CTX  mLSTM PT Autograd Compile FWBW  mLSTM Triton FWBW  mLSTM PT Autograd Compile FW  mLSTM Triton FW
+0   256.0                        0.264804           0.374493                      0.072992         0.064823
+1   512.0                        0.578312           0.774771                      0.178977         0.142496
+2  1024.0                        2.159089           2.272552                      0.584149         0.425770
+3  2048.0                        8.405284           8.191925                      2.285031         1.471647
+4  4096.0                       43.880959          29.034836                      9.730020         6.753006
