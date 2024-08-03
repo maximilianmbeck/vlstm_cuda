@@ -258,6 +258,7 @@ def mlstm_fw(
     matV: torch.Tensor,
     vecI: torch.Tensor,
     vecF: torch.Tensor,
+    eps: float = 1e-6,
     # BLOCK_Q: int = BLOCK_Q,
     # BLOCK_KV: int = BLOCK_KV,
 ) -> torch.Tensor:
@@ -338,6 +339,7 @@ def mlstm_fw(
         # BLOCK_Q=BLOCK_Q,
         # BLOCK_KV=BLOCK_KV,
         MINIMUM_MAX_VAL=MINIMUM_MAX_VAL,
+        EPS=eps,
     )
 
     return matH, vecM, vecN

@@ -550,10 +550,11 @@ def mlstm_bw(
     vecF: torch.Tensor,
     vecM: torch.Tensor,
     vecN: torch.Tensor,
-    BLOCK_Q_dKdV: int = BLOCK_Q,
-    BLOCK_KV_dKdV: int = BLOCK_KV,
-    BLOCK_Q_dQ: int = BLOCK_Q,
-    BLOCK_KV_dQ: int = BLOCK_KV,
+    eps: float = 1e-6,
+    # BLOCK_Q_dKdV: int = BLOCK_Q,
+    # BLOCK_KV_dKdV: int = BLOCK_KV,
+    # BLOCK_Q_dQ: int = BLOCK_Q,
+    # BLOCK_KV_dQ: int = BLOCK_KV,
 ) -> torch.Tensor:
     # batch size, number of heads, sequence length, head dimension
     BS, NH, SL, DH = matQ.shape
@@ -632,6 +633,7 @@ def mlstm_bw(
         H=NH,
         N_CTX=SL,
         HEAD_DIM=HEAD_DIM_K,
+        EPS=eps,
         # BLOCK_Q=BLOCK_Q_dKdV,
         # BLOCK_KV=BLOCK_KV_dKdV,
     )
@@ -686,6 +688,7 @@ def mlstm_bw(
         H=NH,
         N_CTX=SL,
         HEAD_DIM=HEAD_DIM_K,
+        EPS=eps,
         # BLOCK_Q=BLOCK_Q_dQ,
         # BLOCK_KV=BLOCK_KV_dQ,
     )
