@@ -12,7 +12,7 @@ mLSTM forward and backward pass. Parallel formulation.
 """
 
 
-def mlstm_fw(
+def _mlstm_fw(
     matQ: torch.Tensor,
     matK: torch.Tensor,
     matV: torch.Tensor,
@@ -65,7 +65,7 @@ def mlstm_fw(
     return matH, vecM.squeeze(-1), vecN.squeeze(-1)
 
 
-def mlstm_bw(
+def _mlstm_bw(
     matDeltaHtilde: torch.Tensor,
     matQ: torch.Tensor,
     matK: torch.Tensor,
@@ -142,6 +142,18 @@ def mlstm_bw(
     )
 
 
+def mlstm_fw(
+    matQ: torch.Tensor,
+    matK: torch.Tensor,
+    matV: torch.Tensor,
+    vecI: torch.Tensor,
+    vecF: torch.Tensor,
+    eps: float = 1e-6,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    matH, _, _ = _mlstm_fw(matQ, matK, matV, vecI, vecF, eps)
+    return matH
+
+
 def mlstm_fwbw(
     matQ: torch.Tensor,
     matK: torch.Tensor,
@@ -166,7 +178,7 @@ class _mlstm_fwbw(torch.autograd.Function):
         vecF: torch.Tensor,
         eps: float = 1e-6,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        matH, vecM, vecN = mlstm_fw(
+        matH, vecM, vecN = _mlstm_fw(
             matQ=matQ,
             matK=matK,
             matV=matV,
@@ -185,7 +197,7 @@ class _mlstm_fwbw(torch.autograd.Function):
         vecDeltaN_unused: torch.Tensor,
     ) -> tuple[torch.Tensor, ...]:
         (matQ, matK, matV, vecI, vecF, vecM, vecN) = ctx.saved_tensors
-        matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF = mlstm_bw(
+        matDeltaQ, matDeltaK, matDeltaV, vecDeltaI, vecDeltaF = _mlstm_bw(
             matDeltaHtilde=matDeltaHtilde,
             matQ=matQ,
             matK=matK,
