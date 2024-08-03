@@ -35,7 +35,11 @@ class LayerNorm(nn.Module):
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         return F.layer_norm(
-            input, normalized_shape=(self.ndim,), weight=self.weight_proxy, bias=self.bias, eps=self.eps
+            input,
+            normalized_shape=(self.ndim,),
+            weight=self.weight_proxy,
+            bias=self.bias,
+            eps=self.eps,
         )
 
     def reset_parameters(self):
@@ -53,6 +57,9 @@ class MultiHeadLayerNorm(LayerNorm):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         assert input.dim() == 4, "Input must be 4D tensor (B, NH, S, DH)"
         B, NH, S, DH = input.shape
+        in_dtype = input.dtype
+
+        input = input.to(dtype=self.weight.dtype)
 
         gn_in_1 = input.transpose(1, 2)  # (B, S, NH, DH)
         gn_in_2 = gn_in_1.reshape(B * S, NH * DH)  # (B * S, NH * DH)
@@ -63,6 +70,7 @@ class MultiHeadLayerNorm(LayerNorm):
             bias=self.bias,
             eps=self.eps,
         )
+        out = out.to(dtype=in_dtype)
         # (B * S), (NH * DH) -> (B, S, NH, DH) -> (B, NH, S, DH)
         out = out.view(B, S, NH, DH).transpose(1, 2)
         return out
