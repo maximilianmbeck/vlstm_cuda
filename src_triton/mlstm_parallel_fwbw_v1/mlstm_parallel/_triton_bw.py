@@ -20,22 +20,40 @@ After these two loops we compute the delta errors for the forget gates.
 """
 
 
+# configs = [
+#     triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
+#     for BQ, BKV in [
+#         # (128, 128),
+#         # (128, 64),
+#         # (128, 32),
+#         # (128, 16),
+#         (64, 64),
+#         (64, 32),
+#         # (64, 16),
+#         (32, 32),
+#         (32, 16),
+#         (16, 16),
+#     ]
+#     for s in [3, 4, 7]
+#     for w in [4, 8]
+# ]
+
 configs = [
     triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
     for BQ, BKV in [
-        (128, 128),
-        (128, 64),
-        (128, 32),
-        (128, 16),
-        (64, 64),
-        (64, 32),
-        (64, 16),
-        (32, 32),
-        (32, 16),
+        # (128, 128),
+        # (128, 64),
+        # (128, 32),
+        # (128, 16),
+        # (64, 64),
+        # (64, 32),
+        # (64, 16),
+        # (32, 32),
+        # (32, 16),
         (16, 16),
     ]
-    for s in [3, 4, 7]
-    for w in [4, 8]
+    for s in [4]
+    for w in [4]
 ]
 
 
@@ -279,10 +297,10 @@ def _mlstm_bwd_dkdv(
 
         matP_tile = matDeltaC_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
         matR_tile = matS_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
-        matR_tile = matR_tile.to(tl.float16)
+        matR_tile = matR_tile.to(matQ_tile.type.element_ty)
 
         # update matDeltaQ_tile in HBM
-        matP_tile = matP_tile.to(tl.float16)
+        matP_tile = matP_tile.to(matQ_tile.type.element_ty)
 
         # update matDeltaK_tile, matDeltaV_tile in SRAM
         matP_tile_transposed = tl.trans(matP_tile)  # (BLOCK_KV, BLOCK_Q)
@@ -297,7 +315,9 @@ def _mlstm_bwd_dkdv(
         matDeltaHtilde_tile_normalized = matDeltaHtilde_tile / (
             vecN_chunk_Q[:, None] + EPS
         )  # (BLOCK_Q, HEAD_DIM)
-        matDeltaHtilde_tile_normalized = matDeltaHtilde_tile_normalized.to(tl.float16)
+        matDeltaHtilde_tile_normalized = matDeltaHtilde_tile_normalized.to(
+            matQ_tile.type.element_ty
+        )
         # tl.static_print("matR_tile_transposed", matR_tile_transposed)
         # tl.static_print(
         #     "matDeltaHtilde_tile_normalized", matDeltaHtilde_tile_normalized
@@ -525,7 +545,7 @@ def _mlstm_bwd_dQ(
         matP_tile = matDeltaC_tile * matDprime_tile  # (BLOCK_Q, BLOCK_KV)
 
         # update matDeltaQ_tile in SRAM
-        matP_tile = matP_tile.to(tl.float16)
+        matP_tile = matP_tile.to(matK_tile.type.element_ty)
         # tl.static_print("matP_tile", matP_tile)
         # tl.static_print("matK_tile", matK_tile)
         matDeltaQ_tile_iter = tl.dot(matP_tile, matK_tile)  # (BLOCK_Q, HEAD_DIM)
@@ -570,7 +590,13 @@ def mlstm_bw(
     # when v is in float8_e5m2 it is transposed.
     HEAD_DIM_V = matV.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
-    # assert HEAD_DIM_K in {16, 32, 64, 128, 256}
+    assert HEAD_DIM_K in {
+        16,
+        32,
+        64,
+        128,
+        256,
+    }, f"Only support HEAD_DIM in [16, 32, 64, 128, 256], got {HEAD_DIM_K}"
 
     ## ? preprocessing, initialization
     matDeltaQ = torch.ones_like(matQ)
@@ -579,7 +605,9 @@ def mlstm_bw(
 
     vecDeltaI = torch.zeros_like(vecI)
 
-    vecF_cs = torch.nn.functional.logsigmoid(vecF).cumsum(-1)
+    # Note we want to compute the forget gate cumsum in float32.
+    # This results in a more accurate cumsum and lower numerical precision errors.
+    vecF_cs = torch.nn.functional.logsigmoid(vecF.to(dtype=torch.float32)).cumsum(-1)
     ## ? end preprocessing
 
     grid_dKdV = lambda args: (

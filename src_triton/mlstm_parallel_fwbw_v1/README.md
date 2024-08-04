@@ -7,9 +7,64 @@ TODOs until production readiness:
 - [x] align naming of pure pytorch implementation.
 - [x] Add a torch autograd function for triton kernels. Check numerical errors.
 - [x] Add fwbw speed checks compare to pytorch.
-- [ ] Add bounds checking to support arbitrary sequence length and head dimension
-- [ ] Support float16 and bfloat16 dtypes. Check numerical errors.
+- [x] Add bounds checking to support arbitrary sequence length and head dimension
+  - we cannot do bounds checking this results in an error.
+  - [ ]: follow up support arbitrary head dimensions.
+- [x] Support float16 and bfloat16 dtypes. Check numerical errors.
 - [ ] enable autmatic mixed precision see xLSTM repo for sLSTM kernels
+
+## Open points
+
+### Arbitrary head dimensions
+
+Currently we only support head dimensions of power of 2.
+Reason for this is that tl.zeros([BQ, DH]) only supports sizes of power of 2.
+We could set it manually and pad with zeros, but this proably results in inefficiency.
+
+### Enable automatic mixed precision
+
+Somehow torch.cuda.amp.custom_fwd decorator is deprecated.
+So leave that out for now.
+Probably go to: Make a config and manually cast inputs to configured dtype.
+We probably want to have float16 instead of bfloat16.
+
+```
+S=256, DH=64, Baselines in float32
+
+Errors with vecF_cs in float16:
+====== Triton -> PT Autograd ======
+hs match: False, max diff: 0.19851431250572205
+dQ match: False, max diff: 3.22531795501709
+dK match: False, max diff: 3.1646175384521484
+dV match: False, max diff: 1.4900684356689453
+dI match: False, max diff: 6.1808013916015625
+dF match: False, max diff: 3.6602001190185547
+ ====== Triton -> PT Own backward ======
+hs match: False, max diff: 0.19851431250572205
+dQ match: False, max diff: 3.22531795501709
+dK match: False, max diff: 3.16463565826416
+dV match: False, max diff: 1.490067481994629
+dI match: False, max diff: 6.180503845214844
+dF match: False, max diff: 3.6602210998535156
+
+Errors with vecF_cs in float32:
+====== Triton -> PT Autograd ======
+hs match: False, max diff: 0.008412718772888184
+dQ match: False, max diff: 0.30786895751953125
+dK match: False, max diff: 0.24111175537109375
+dV match: False, max diff: 0.03338479995727539
+dI match: False, max diff: 0.17911529541015625
+dF match: False, max diff: 0.10850143432617188
+ ====== Triton -> PT Own backward ======
+hs match: False, max diff: 0.008412718772888184
+dQ match: False, max diff: 0.30786895751953125
+dK match: False, max diff: 0.2411041259765625
+dV match: False, max diff: 0.033383846282958984
+dI match: False, max diff: 0.1794586181640625
+dF match: False, max diff: 0.10846734046936035
+```
+
+**Result**: The fgate cumsum plays a crucial role in numerical errors (as expected). Keep this in float32.
 
 ## Benchmark PyTorch compile vs. Triton
 

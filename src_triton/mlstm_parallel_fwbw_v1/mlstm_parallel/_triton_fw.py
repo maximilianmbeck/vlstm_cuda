@@ -17,22 +17,40 @@ Similar work partitioning as Flash-Attention2.
 """
 
 
+# configs = [
+#     triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
+#     for BQ, BKV in [
+#         (128, 128),
+#         (128, 64),
+#         (128, 32),
+#         (128, 16),
+#         (64, 64),
+#         (64, 32),
+#         (64, 16),
+#         (32, 32),
+#         (32, 16),
+#         (16, 16),
+#     ]
+#     for s in [3, 4, 7]
+#     for w in [4, 8]
+# ]
+
 configs = [
     triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
     for BQ, BKV in [
-        (128, 128),
-        (128, 64),
-        (128, 32),
-        (128, 16),
-        (64, 64),
-        (64, 32),
-        (64, 16),
-        (32, 32),
-        (32, 16),
+        # (128, 128),
+        # (128, 64),
+        # (128, 32),
+        # (128, 16),
+        # (64, 64),
+        # (64, 32),
+        # (64, 16),
+        # (32, 32),
+        # (32, 16),
         (16, 16),
     ]
-    for s in [3, 4, 7]
-    for w in [4, 8]
+    for s in [4]
+    for w in [4]
 ]
 
 
@@ -236,7 +254,7 @@ def _mlstm_fwd(
         v = tl.load(V_block_ptr)
 
         matC = matC / (n_new[:, None] + EPS)
-        matC = matC.to(tl.float16)
+        matC = matC.to(q.type.element_ty)
         h_out = tl.dot(matC, v, h_out)
 
         V_block_ptr = tl.advance(V_block_ptr, (BLOCK_KV, 0))
@@ -274,7 +292,13 @@ def mlstm_fw(
     # when v is in float8_e5m2 it is transposed.
     HEAD_DIM_V = matV.shape[-1]
     assert HEAD_DIM_Q == HEAD_DIM_K and HEAD_DIM_K == HEAD_DIM_V
-    # assert HEAD_DIM_K in {16, 32, 64, 128, 256}
+    assert HEAD_DIM_K in {
+        16,
+        32,
+        64,
+        128,
+        256,
+    }, f"Only head dimensions 16, 32, 64, 128, 256 are supported, got {HEAD_DIM_K}"
 
     grid = lambda args: (
         triton.cdiv(matQ.shape[2], args["BLOCK_Q"]),
@@ -289,7 +313,6 @@ def mlstm_fw(
     # )
     # print(f"Triton grid: {grid(None)}, BLOCK_Q: {BLOCK_Q}, BLOCK_KV: {BLOCK_KV}")
 
-    # TODO unify dtypes
     matH = torch.empty_like(matQ)
 
     vecN = torch.zeros(
@@ -303,7 +326,9 @@ def mlstm_fw(
         dtype=torch.float32,
     )
 
-    vecF_cs = torch.nn.functional.logsigmoid(vecF).cumsum(-1)
+    # Note we want to compute the forget gate cumsum in float32.
+    # This results in a more accurate cumsum and lower numerical precision errors.
+    vecF_cs = torch.nn.functional.logsigmoid(vecF.to(dtype=torch.float32)).cumsum(-1)
 
     _mlstm_fwd[grid](
         matQ=matQ.contiguous(),
