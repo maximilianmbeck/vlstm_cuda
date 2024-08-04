@@ -110,8 +110,6 @@ def _mlstm_bw(
 
     matS = (matQ @ matK.transpose(-2, -1)) / math.sqrt(DH)
 
-    # matDeltaD = matDeltaC * matS
-
     matDeltaDtilde = matDeltaC * matD * matS
 
     vecDeltaI = torch.sum(matDeltaDtilde, dim=-2)
