@@ -7,8 +7,13 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 
+"""This file contains the first mlstm chunkwise parallel implementation.
 
-def mlstm_chunkwise_parallel(
+This is the starting point for the next iterations.
+"""
+
+
+def mlstm_chunkwise_parallel_legacy(
     queries: torch.Tensor,
     keys: torch.Tensor,
     values: torch.Tensor,
