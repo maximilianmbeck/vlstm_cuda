@@ -19,42 +19,44 @@ The second loop computes the delta errors for the queries.
 After these two loops we compute the delta errors for the forget gates.
 """
 
+ENABLE_AUTOTUNING = True
 
-# configs = [
-#     triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
-#     for BQ, BKV in [
-#         # (128, 128),
-#         # (128, 64),
-#         # (128, 32),
-#         # (128, 16),
-#         (64, 64),
-#         (64, 32),
-#         # (64, 16),
-#         (32, 32),
-#         (32, 16),
-#         (16, 16),
-#     ]
-#     for s in [3, 4, 7]
-#     for w in [4, 8]
-# ]
-
-configs = [
-    triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
-    for BQ, BKV in [
-        # (128, 128),
-        # (128, 64),
-        # (128, 32),
-        # (128, 16),
-        # (64, 64),
-        # (64, 32),
-        # (64, 16),
-        # (32, 32),
-        # (32, 16),
-        (16, 16),
+if ENABLE_AUTOTUNING:
+    configs = [
+        triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
+        for BQ, BKV in [
+            (128, 128),
+            (128, 64),
+            (128, 32),
+            (128, 16),
+            (64, 64),
+            (64, 32),
+            (64, 16),
+            (32, 32),
+            (32, 16),
+            (16, 16),
+        ]
+        for s in [3, 4, 7]
+        for w in [4, 8]
     ]
-    for s in [4]
-    for w in [4]
-]
+else:
+    configs = [
+        triton.Config({"BLOCK_Q": BQ, "BLOCK_KV": BKV}, num_stages=s, num_warps=w)
+        for BQ, BKV in [
+            # (128, 128),
+            # (128, 64),
+            # (128, 32),
+            # (128, 16),
+            # (64, 64),
+            # (64, 32),
+            # (64, 16),
+            # (32, 32),
+            # (32, 16),
+            (16, 16),
+        ]
+        for s in [4]
+        for w in [4]
+    ]
 
 
 def keep(conf):
