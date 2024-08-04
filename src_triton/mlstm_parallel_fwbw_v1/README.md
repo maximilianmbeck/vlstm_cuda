@@ -7,8 +7,8 @@ TODOs until production readiness:
 - [x] align naming of pure pytorch implementation.
 - [x] Add a torch autograd function for triton kernels. Check numerical errors.
 - [x] Add fwbw speed checks compare to pytorch.
-- [ ] Support float16 and bfloat16 dtypes. Check numerical errors.
 - [ ] Add bounds checking to support arbitrary sequence length and head dimension
+- [ ] Support float16 and bfloat16 dtypes. Check numerical errors.
 - [ ] enable autmatic mixed precision see xLSTM repo for sLSTM kernels
 
 ## Benchmark PyTorch compile vs. Triton

@@ -12,6 +12,8 @@ Triton
 mLSTM forward pass. Parallel formulation.
 
 Similar work partitioning as Flash-Attention2.
+
+# TODO adapt to notation of backward pass in _triton_bw.py
 """
 
 
