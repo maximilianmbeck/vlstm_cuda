@@ -52,17 +52,16 @@ def mlstm_chunkwise_parallel_fw_looped(
     # compute the gates, the g and the a and b vectors
     vecF_logsig = F.logsigmoid(vecF)
 
-    vecA_fcs = vecF_logsig[:, :, :, :].cumsum(-1)
+    vecB_fcs = vecF_logsig.cumsum(-1)
+    vecA_frcs = vecF_logsig.sum(-1, keepdim=True) - vecB_fcs
 
-    vecB_frcs = vecF_logsig[:, :, :, :].sum(-1, keepdim=True) - vecA_fcs
-
-    vecA = vecA_fcs
-    vecB = vecB_frcs + vecI
+    vecB = vecB_fcs
+    vecA = vecA_frcs + vecI
     vecG = vecF_logsig.sum(-1)
 
     # get the maximum values per chunk for p and q
-    vecA_max = vecA.max(-1).values
     vecB_max = vecB.max(-1).values
+    vecA_max = vecA.max(-1).values
 
     # loop 1: materialize the  C_k, n_k, m_k
     matC_k_states = torch.zeros((B, NH, NC, DH, DH), dtype=_dtype, device=_device)
@@ -78,17 +77,17 @@ def mlstm_chunkwise_parallel_fw_looped(
     for k in range(1, NC):
 
         # m_k
-        m_q_k = vecB_max[:, :, k - 1]
+        m_a_k = vecA_max[:, :, k - 1]
         g_k = vecG[:, :, k - 1]
-        m_k_inter = torch.max(g_k + m_prev_k, m_q_k)
+        m_k_inter = torch.max(g_k + m_prev_k, m_a_k)
         scaMinter_k_states[:, :, k] = m_k_inter
 
         # C_k
         matK_chunk = matK[:, :, k - 1, :, :].clone()
         matV_chunk = matV[:, :, k - 1, :, :].clone()
-        b_k = vecB[:, :, k - 1, :].clone()
+        a_k = vecA[:, :, k - 1, :].clone()
 
-        matK_chunk_gated = matK_chunk * torch.exp(b_k - m_k_inter).unsqueeze(-1)
+        matK_chunk_gated = matK_chunk * torch.exp(a_k - m_k_inter).unsqueeze(-1)
 
         C_k = (
             torch.exp(g_k + m_prev_k - m_k_inter) * C_prev_k
@@ -149,14 +148,14 @@ def mlstm_chunkwise_parallel_fw_looped(
         ).values  # (B, NH, L)
 
         # max_state inter
-        vecA_k_chunk = vecA[:, :, k - 1]  # (B, NH, L)
+        vecB_k_chunk = vecB[:, :, k - 1]  # (B, NH, L)
 
         # max_state combined
-        vecM_a_inter = vecA_k_chunk + m_k_inter
-        vecM_k_inter_intra = torch.maximum(vecM_a_inter, vecMintra_k)  # (B, NH, L)
+        vecM_b_inter = vecB_k_chunk + m_k_inter
+        vecM_k_inter_intra = torch.maximum(vecM_b_inter, vecMintra_k)  # (B, NH, L)
 
         vecM_k_inter_intra = vecM_k_inter_intra[:, :, :, None]  # (B, NH, L, 1)
-        vecM_a_inter = vecM_a_inter[:, :, :, None]  # (B, NH, L, 1)
+        vecM_b_inter = vecM_b_inter[:, :, :, None]  # (B, NH, L, 1)
 
         matLogD_stabilized_chunk = matLogD_chunk - vecM_k_inter_intra
         matD_chunk = torch.exp(matLogD_stabilized_chunk)
@@ -167,7 +166,7 @@ def mlstm_chunkwise_parallel_fw_looped(
         matM_chunk = matS_chunk * matD_chunk
 
         # ? Combine H_intra with H_inter
-        matQ_chunk_gated = matQ_chunk * torch.exp(vecM_a_inter - vecM_k_inter_intra)
+        matQ_chunk_gated = matQ_chunk * torch.exp(vecM_b_inter - vecM_k_inter_intra)
 
         numerator_common = matQ_chunk_gated @ C_k + matM_chunk @ matV_chunk
 
