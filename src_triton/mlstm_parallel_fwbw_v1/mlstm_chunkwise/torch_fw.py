@@ -191,6 +191,7 @@ def mlstm_chunkwise_parallel_fw_parallel(
     vecI: torch.Tensor,
     vecF: torch.Tensor,
     seq_chunk_size: int = 64,
+    detach_denominator: bool = False,
 ):
     B, NH, S, DH = matQ.shape
     _dtype, _device = matQ.dtype, matQ.device
@@ -312,9 +313,14 @@ def mlstm_chunkwise_parallel_fw_parallel(
         dim=-1, keepdim=True
     )
 
-    matH_k_chunk = numerator_common / torch.maximum(
+    max_denom_common = torch.maximum(
         torch.abs(denom_common), torch.exp(-vecM_k_inter_intra)
     )
+
+    if detach_denominator:
+        max_denom_common = max_denom_common.detach()
+
+    matH_k_chunk = numerator_common / max_denom_common
 
     H_out = rearrange(matH_k_chunk, "b nh nc l dh -> b nh (nc l) dh")
     return H_out
