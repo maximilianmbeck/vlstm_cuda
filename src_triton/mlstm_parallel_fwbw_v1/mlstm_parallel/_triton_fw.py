@@ -234,10 +234,8 @@ def _mlstm_fwd(
         m_ratio = tl.exp(m_old - m_new)
 
         # ? -- compute matC --
-        # TODO refactor naming: Be careful with tilde and prime notation
-        # change naming here actually matD_tilde is matD_prime, and matD is matD_tilde
-        matD_tilde = tl.exp(matD - m_new[:, None])
-        matC = matS * matD_tilde
+        matD_prime = tl.exp(matD - m_new[:, None])
+        matC = matS * matD_prime
 
         # ? -- compute l_state --
         # tl.fma did not bring performance improvement
