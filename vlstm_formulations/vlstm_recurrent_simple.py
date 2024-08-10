@@ -134,10 +134,12 @@ def vlstm_recurrent_step_stabilized(
     n_state_new = fg_act * n_state + ig_act * k_scaled  # (B, NH, DH, 1)
 
     h_num = q.transpose(-1, -2) @ c_state_new  # (B, NH, 1, DH)
+    h_num = h_num.squeeze(-2)  # (B, NH, DH)
 
     qn_dotproduct = q.transpose(-1, -2) @ n_state_new  # (B, NH, 1, 1)
     max_val = torch.exp(-m_state_new)  # (B, NH, 1, 1)
     h_denom = torch.maximum(qn_dotproduct.abs(), max_val) + eps
+    h_denom = h_denom.squeeze(2)  # (B, NH, 1)
     h = h_num / h_denom  # (B, NH, 1, DH) / (B, NH, 1, 1) = (B, NH, 1, DH)
 
     return h, (c_state_new, n_state_new, m_state_new)
